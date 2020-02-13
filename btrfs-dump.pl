@@ -45,8 +45,10 @@ open($f,$ARGV[0]) || die "Error opening ".$ARGV[0].": $!";
 binmode($f);
 
 my %roots=();
+my %logroots=();
 my @l2p=();
 my @l2p_bs=();
+my $csum_type;
 
 read_superblock($f);
 
@@ -69,6 +71,14 @@ my @rs=sort { $a <=> $b } (keys(%roots));
 foreach my $r (@rs) {
 	printf("Tree %x:\n",$r);
 	dump_tree($roots{$r}, "");
+	print "\n";
+}
+
+my @lrs=sort { $a <=> $b } (keys(%logroots));
+
+foreach my $lr (@lrs) {
+	printf("Tree %x (log):\n",$lr);
+	dump_tree($logroots{$lr}, "");
 	print "\n";
 }
 
@@ -158,16 +168,27 @@ sub compat_ro_flags {
 
 sub read_superblock {
 	my ($f)=@_;
-	my ($sb, @b, @b2, @di);
+	my ($sb, @b, @b2, @di, $csum);
 
 	seek($f,0x10000,0);
 	read($f,$sb,0x1000);
 	($roottree, $chunktree, $logtree)=unpack("x80QQQ",$sb);
-	@b = unpack("Vx28A16QQA8QQQQQQQQQVVVVVQQQQvCCCA98A256QQx240a2048a672",$sb);
+	@b = unpack("A32A16QQA8QQQQQQQQQVVVVVQQQQvCCCA98A256QQx240a2048a672",$sb);
     @di = unpack("QQQVVVQQQVCCA16A16",$b[27]);
 
-	printf("superblock csum=%x fsuuid=%s physaddr=%x flags=%x magic=%s gen=%x roottree=%x chunktree=%x logtree=%x log_root_transid=%x total_bytes=%x bytes_used=%x root_dir_objectid=%x num_devices=%x sectorsize=%x nodesize=%x leafsize=%x stripesize=%x n=%x chunk_root_generation=%x compat_flags=%x compat_ro_flags=%s incompat_flags=%s csum_type=%x root_level=%x chunk_root_level=%x log_root_level=%x (dev_item id=%x numbytes=%x bytesused=%x ioalign=%x iowidth=%x sectorsize=%x type=%x gen=%x startoff=%x devgroup=%x seekspeed=%x bandwidth=%x devid=%s fsid=%s) label=%s cache_gen=%x uuid_tree_gen=%x\n", $b[0], format_uuid($b[1]), $b[2], $b[3], $b[4], $b[5], $b[6], $b[7], $b[8], $b[9], $b[10], $b[11], $b[12], $b[13], $b[14], $b[15], $b[16], $b[17], $b[18], $b[19], $b[20], compat_ro_flags($b[21]), incompat_flags($b[22]), $b[23], $b[24], $b[25], $b[26], $di[0], $di[1], $di[2], $di[3], $di[4], $di[5], $di[6], $di[7], $di[8], $di[9], $di[10], $di[11], format_uuid($di[12]), format_uuid($di[13]), $b[28], $b[29], $b[30]);
+	$csum_type = $b[23];
+
+	if ($csum_type == 1) {
+		$csum = sprintf("%016x", unpack("Q", $b[0]));
+	} elsif ($csum_type == 2 || $csum_type == 3) {
+		$csum = sprintf("%016x%016x%016x%016x", unpack("QQQQ", $b[0]));
+	} else {
+		$csum = sprintf("%08x", unpack("V", $b[0]));
+	}
+
+	printf("superblock csum=%s fsuuid=%s physaddr=%x flags=%x magic=%s gen=%x roottree=%x chunktree=%x logtree=%x log_root_transid=%x total_bytes=%x bytes_used=%x root_dir_objectid=%x num_devices=%x sectorsize=%x nodesize=%x leafsize=%x stripesize=%x n=%x chunk_root_generation=%x compat_flags=%x compat_ro_flags=%s incompat_flags=%s csum_type=%x root_level=%x chunk_root_level=%x log_root_level=%x (dev_item id=%x numbytes=%x bytesused=%x ioalign=%x iowidth=%x sectorsize=%x type=%x gen=%x startoff=%x devgroup=%x seekspeed=%x bandwidth=%x devid=%s fsid=%s) label=%s cache_gen=%x uuid_tree_gen=%x\n", $csum, format_uuid($b[1]), $b[2], $b[3], $b[4], $b[5], $b[6], $b[7], $b[8], $b[9], $b[10], $b[11], $b[12], $b[13], $b[14], $b[15], $b[16], $b[17], $b[18], $b[19], $b[20], compat_ro_flags($b[21]), incompat_flags($b[22]), $b[23], $b[24], $b[25], $b[26], $di[0], $di[1], $di[2], $di[3], $di[4], $di[5], $di[6], $di[7], $di[8], $di[9], $di[10], $di[11], format_uuid($di[12]), format_uuid($di[13]), $b[28], $b[29], $b[30]);
 	my $devid=format_uuid($di[12]);
+
 
 	$nodesize = $b[15];
 
@@ -514,10 +535,21 @@ sub dump_item {
 	} elsif ($type == 0x80) { # EXTENT_CSUM
 		print "extent_csum";
 
-		# FIXME
-		while (length($s)>0) {
-			printf(" %08x",unpack("V",$s));
-			$s=substr($s,4);
+		if ($csum_type == 1) { # xxhash
+			while (length($s)>0) {
+				printf(" %016x",unpack("Q",$s));
+				$s=substr($s,8);
+			}
+		} elsif ($csum_type == 2 || $csum_type == 3) { # sha256 or blake2
+			while (length($s)>0) {
+				printf(" %016x%016x%016x%016x",unpack("QQQQ",$s));
+				$s=substr($s,32);
+			}
+		} else {
+			while (length($s)>0) {
+				printf(" %08x",unpack("V",$s));
+				$s=substr($s,4);
+			}
 		}
 	} elsif ($type == 0x90 || $type == 0x9c) { # ROOT_BACKREF or ROOT_REF
 		@b=unpack("QQv",$s);
@@ -794,19 +826,26 @@ sub read_data {
 
 sub dump_tree {
 	my ($addr, $pref, $bs)=@_;
-	my ($head, @headbits, $level, $treenum, $tree);
+	my ($head, @headbits, $level, $treenum, $tree, $csum);
 
 	$tree = read_data($addr, $nodesize, $bs);
 
-	@headbits=unpack("Vx28A16QQA16QQVC",$tree);
+	@headbits=unpack("A32A16QQA16QQVC",$tree);
 	if ($headbits[2] != $addr) {
 		printf STDERR sprintf("Address mismatch: expected %llx, got %llx\n", $addr, $headbits[2]);
 		exit;
 	}
 
-	#print Dumper(@headbits)."\n";
+	if ($csum_type == 1) {
+		$csum = sprintf("%016x", unpack("Q", $headbits[0]));
+	} elsif ($csum_type == 2 || $csum_type == 3) {
+		$csum = sprintf("%016x%016x%016x%016x", unpack("QQQQ", $headbits[0]));
+	} else {
+		$csum = sprintf("%08x", unpack("V", $headbits[0]));
+	}
+
 	print $pref;
-	printf("header csum=%08x fsid=%s addr=%x flags=%x chunk=%s gen=%x tree=%x numitems=%x level=%x\n", $headbits[0], format_uuid($headbits[1]), $headbits[2], $headbits[3], format_uuid($headbits[4]), $headbits[5], $headbits[6], $headbits[7], $headbits[8]);
+	printf("header csum=%s fsid=%s addr=%x flags=%x chunk=%s gen=%x tree=%x numitems=%x level=%x\n", $csum, format_uuid($headbits[1]), $headbits[2], $headbits[3], format_uuid($headbits[4]), $headbits[5], $headbits[6], $headbits[7], $headbits[8]);
 
 	$level=$headbits[8];
 	$treenum=$headbits[6];
@@ -874,8 +913,12 @@ sub dump_tree {
 # 				print Dumper(@l2p);
             }
 
-			if ($treenum==1&&$ihb[1]==0x84) {
-				$roots{$ihb[0]}=unpack("x176Q",$item);
+			if ($ihb[1] == 0x84) {
+				if ($treenum == 1) {
+					$roots{$ihb[0]}=unpack("x176Q",$item);
+				} elsif ($treenum == 0xfffffffffffffffa && $ihb[0] == 0xfffffffffffffffa) {
+					$logroots{$ihb[2]}=unpack("x176Q",$item);
+				}
 			}
 		}
 	} else {

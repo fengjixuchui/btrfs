@@ -53,9 +53,12 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <emmintrin.h>
 #include "btrfs.h"
 #include "btrfsioctl.h"
+
+#if defined(_X86_) || defined(_AMD64_)
+#include <emmintrin.h>
+#endif
 
 #ifdef _DEBUG
 // #define DEBUG_FCB_REFCOUNTS
@@ -442,6 +445,7 @@ typedef struct _root {
     LONG send_ops;
     uint64_t fcbs_version;
     bool checked_for_orphans;
+    bool dropped;
     LIST_ENTRY fcbs;
     LIST_ENTRY* fcbs_ptrs[256];
     LIST_ENTRY list_entry;
@@ -1188,7 +1192,12 @@ void _free_fcb(_Inout_ fcb* fcb, _In_ const char* func);
 void init_fast_io_dispatch(FAST_IO_DISPATCH** fiod);
 
 // in crc32c.c
-uint32_t calc_crc32c(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen);
+#if defined(_X86_) || defined(_AMD64_)
+uint32_t __stdcall calc_crc32c_hw(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen);
+#endif
+uint32_t __stdcall calc_crc32c_sw(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen);
+typedef uint32_t (__stdcall *crc_func)(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen);
+extern crc_func calc_crc32c;
 
 typedef struct {
     LIST_ENTRY* list;
@@ -1566,6 +1575,8 @@ NTSTATUS __stdcall compat_FsRtlValidateReparsePointBuffer(IN ULONG BufferLength,
 
 // in boot.c
 void __stdcall check_system_root(PDRIVER_OBJECT DriverObject, PVOID Context, ULONG Count);
+void boot_add_device(DEVICE_OBJECT* pdo);
+extern BTRFS_UUID boot_uuid;
 
 // based on function in sys/sysmacros.h
 #define makedev(major, minor) (((minor) & 0xFF) | (((major) & 0xFFF) << 8) | (((uint64_t)((minor) & ~0xFF)) << 12) | (((uint64_t)((major) & ~0xFFF)) << 32))
@@ -1639,6 +1650,8 @@ static __inline bool write_fcb_compressed(fcb* fcb) {
 
 static __inline void do_xor(uint8_t* buf1, uint8_t* buf2, uint32_t len) {
     uint32_t j;
+
+#if defined(_X86_) || defined(_AMD64_)
     __m128i x1, x2;
 
     if (have_sse2 && ((uintptr_t)buf1 & 0xf) == 0 && ((uintptr_t)buf2 & 0xf) == 0) {
@@ -1653,6 +1666,22 @@ static __inline void do_xor(uint8_t* buf1, uint8_t* buf2, uint32_t len) {
             len -= 16;
         }
     }
+#elif defined(_ARM_) || defined(_ARM64_)
+    uint64x2_t x1, x2;
+
+    if (((uintptr_t)buf1 & 0xf) == 0 && ((uintptr_t)buf2 & 0xf) == 0) {
+        while (len >= 16) {
+            x1 = vld1q_u64((const uint64_t*)buf1);
+            x2 = vld1q_u64((const uint64_t*)buf2);
+            x1 = veorq_u64(x1, x2);
+            vst1q_u64((uint64_t*)buf1, x1);
+
+            buf1 += 16;
+            buf2 += 16;
+            len -= 16;
+        }
+    }
+#endif
 
     for (j = 0; j < len; j++) {
         *buf1 ^= *buf2;

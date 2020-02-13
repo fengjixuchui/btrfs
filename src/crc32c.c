@@ -15,12 +15,19 @@
  * You should have received a copy of the GNU Lesser General Public Licence
  * along with WinBtrfs.  If not, see <http://www.gnu.org/licenses/>. */
 
+#include "btrfs_drv.h"
 #include <windef.h>
+
+#if defined(_X86_) || defined(_AMD64_)
 #include <smmintrin.h>
+#endif
+
 #include <stdint.h>
 #include <stdbool.h>
 
-extern bool have_sse42;
+uint32_t __stdcall calc_crc32c_sw(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen);
+
+crc_func calc_crc32c = calc_crc32c_sw;
 
 static const uint32_t crctable[] = {
     0x00000000, 0xf26b8303, 0xe13b70f7, 0x1350f3f4, 0xc79a971f, 0x35f1141c, 0x26a1e7e8, 0xd4ca64eb,
@@ -67,14 +74,16 @@ static const uint32_t crctable[] = {
     }                                                                   \
   } while(0)
 
-static uint32_t crc32c_hw(const void *input, ULONG len, uint32_t crc) {
-    const char* buf = (const char*)input;
+#if defined(_X86_) || defined(_AMD64_)
+uint32_t __stdcall calc_crc32c_hw(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen) {
+    uint32_t crc = seed;
+    const char* buf = (const char*)msg;
 
     // Annoyingly, the CRC32 intrinsics don't work properly in modern versions of MSVC -
     // it compiles _mm_crc32_u8 as if it was _mm_crc32_u32. And because we're apparently
     // not allowed to use inline asm on amd64, there's no easy way to fix this!
 
-    for (; (len > 0) && ((size_t)buf & ALIGN_MASK); len--, buf++) {
+    for (; (msglen > 0) && ((size_t)buf & ALIGN_MASK); msglen--, buf++) {
 #ifdef _MSC_VER
         crc = crctable[(crc ^ *buf) & 0xff] ^ (crc >> 8);
 #else
@@ -88,37 +97,31 @@ static uint32_t crc32c_hw(const void *input, ULONG len, uint32_t crc) {
 #pragma warning(disable:4244) // _mm_crc32_u64 wants to return uint64_t(!)
 #pragma warning(disable:4242)
 #endif
-    CALC_CRC(_mm_crc32_u64, crc, uint64_t, buf, len);
+    CALC_CRC(_mm_crc32_u64, crc, uint64_t, buf, msglen);
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
 #endif
-    CALC_CRC(_mm_crc32_u32, crc, uint32_t, buf, len);
+    CALC_CRC(_mm_crc32_u32, crc, uint32_t, buf, msglen);
 
 #ifdef _MSC_VER
-    for (; len > 0; len--, buf++) {
+    for (; msglen > 0; msglen--, buf++) {
         crc = crctable[(crc ^ *buf) & 0xff] ^ (crc >> 8);
     }
 #else
-    CALC_CRC(_mm_crc32_u16, crc, uint16_t, buf, len);
-    CALC_CRC(_mm_crc32_u8, crc, uint8_t, buf, len);
+    CALC_CRC(_mm_crc32_u16, crc, uint16_t, buf, msglen);
+    CALC_CRC(_mm_crc32_u8, crc, uint8_t, buf, msglen);
 #endif
 
     return crc;
 }
+#endif
 
-uint32_t calc_crc32c(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen) {
-    uint32_t rem;
-    ULONG i;
+uint32_t __stdcall calc_crc32c_sw(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen) {
+    uint32_t rem = seed;
 
-    if (have_sse42) {
-        return crc32c_hw(msg, msglen, seed);
-    } else {
-        rem = seed;
-
-        for (i = 0; i < msglen; i++) {
-            rem = crctable[(rem ^ msg[i]) & 0xff] ^ (rem >> 8);
-        }
+    for (ULONG i = 0; i < msglen; i++) {
+        rem = crctable[(rem ^ msg[i]) & 0xff] ^ (rem >> 8);
     }
 
     return rem;

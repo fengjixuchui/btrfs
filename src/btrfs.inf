@@ -2,7 +2,7 @@
 ;;; WinBtrfs
 ;;;
 ;;;
-;;; Copyright (c) 2016-19 Mark Harmstone
+;;; Copyright (c) 2016-20 Mark Harmstone
 ;;;
 
 [Version]
@@ -10,7 +10,7 @@ Signature   = "$Windows NT$"
 Class       = Volume
 ClassGuid   = {71a27cdd-812a-11d0-bec7-08002be2092f}
 Provider    = %Me%
-DriverVer   = 11/10/2019,1.5.0.0
+DriverVer   = 01/28/2020,1.6.0.0
 CatalogFile = btrfs.cat
 
 [DestinationDirs]
@@ -32,13 +32,21 @@ CopyINF     = btrfs.inf
 AddService  = %ServiceName%,0x802,Btrfs.Service
 
 [Manufacturer]
-%Me%=Standard,NTamd64,NTx86
+%Me%=Standard,NTamd64,NTx86,NTarm,NTarm64
 
 [Standard.NTamd64]
 %VolumeName% = Btrfs_Install, BtrfsVolume
 %ControllerName% = Btrfs_Install, ROOT\btrfs
 
 [Standard.NTx86]
+%VolumeName% = Btrfs_Install, BtrfsVolume
+%ControllerName% = Btrfs_Install, ROOT\btrfs
+
+[Standard.NTarm]
+%VolumeName% = Btrfs_Install, BtrfsVolume
+%ControllerName% = Btrfs_Install, ROOT\btrfs
+
+[Standard.NTarm64]
 %VolumeName% = Btrfs_Install, BtrfsVolume
 %ControllerName% = Btrfs_Install, ROOT\btrfs
 
@@ -100,6 +108,12 @@ mkbtrfs.exe = 1,,
 
 [SourceDisksNames.amd64]
 1 = %DiskId1%,,,\x64
+
+[SourceDisksNames.arm]
+1 = %DiskId1%,,,\arm
+
+[SourceDisksNames.arm64]
+1 = %DiskId1%,,,\aarch64
 
 ;;
 ;; String Section

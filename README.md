@@ -1,4 +1,4 @@
-WinBtrfs v1.5
+WinBtrfs v1.6
 -------------
 
 WinBtrfs is a Windows driver for the next-generation Linux filesystem Btrfs.
@@ -9,6 +9,9 @@ as part of the free operating system [ReactOS](https://www.reactos.org/).
 If your Btrfs filesystem is on a MD software RAID device created by Linux, you
 will also need [WinMD](https://github.com/maharmstone/winmd) to get this to appear
 under Windows.
+
+See also [Quibble](https://github.com/maharmstone/quibble), which is an experimental
+bootloader allowing Windows to boot from Btrfs.
 
 First, a disclaimer:
 
@@ -79,10 +82,11 @@ Todo
 * Defragmentation
 * Support for Btrfs quotas
 * Windows 10 reserved storage
-* Transaction log
-* Three- and four-disk RAID1 (Linux 5.6)
-* New checksum types (xxhash, sha256, blake2)
-* Metadata UUID incompat flag
+* Full transaction log support
+* Three- and four-disk RAID1 (Linux 5.5)
+* New checksum types (xxhash, sha256, blake2) (Linux 5.5)
+* Metadata UUID incompat flag (Linux 5.0)
+* Support for Windows transactions (TxF)
 
 Installation
 ------------
@@ -244,6 +248,13 @@ partition type from 83 to 7.
 
 Changelog
 ---------
+
+v1.6 (2020-02-04):
+* Added experimental (i.e. untested) ARM support (thanks to [DjArt](https://github.com/DjArt) for this)
+* Added fixes for booting from Btrfs on Windows 10
+* Volumes will now get remounted if changed while Windows is asleep or hibernating
+* Fixed corruption when mounting volume that hasn't been unmounted cleanly by Linux
+* Fixed crash when deleting subvolume
 
 v1.5 (2019-11-10):
 * More fixes for booting from Btrfs
@@ -492,7 +503,7 @@ via the usual Plug and Play method.
 
 * `NoTrim` (DWORD): set this to 1 to disable TRIM support.
 
-* `NoRootDir` (DWORD): if you have chaned your default subvolume, either natively or by a registry option,
+* `NoRootDir` (DWORD): if you have changed your default subvolume, either natively or by a registry option,
 there will be a hidden directory called $Root which points to where the root would normally be. Set this
 value to 1 to prevent this appearing.
 
