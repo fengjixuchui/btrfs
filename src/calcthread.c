@@ -17,78 +17,67 @@
 
 #include "btrfs_drv.h"
 
-#define SECTOR_BLOCK 16
+static void do_calc(device_extension* Vcb, calc_job* cj, uint8_t* src, uint32_t* dest) {
+    // FIXME - do at DISPATCH irql
 
-NTSTATUS add_calc_job(device_extension* Vcb, uint8_t* data, uint32_t sectors, uint32_t* csum, calc_job** pcj) {
-    calc_job* cj;
+    *dest = ~calc_crc32c(0xffffffff, src, Vcb->superblock.sector_size);
 
-    cj = ExAllocatePoolWithTag(NonPagedPool, sizeof(calc_job), ALLOC_TAG);
-    if (!cj) {
-        ERR("out of memory\n");
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
+    if (InterlockedDecrement(&cj->left) == 0)
+        KeSetEvent(&cj->event, 0, false);
+}
 
-    cj->data = data;
-    cj->sectors = sectors;
-    cj->csum = csum;
-    cj->pos = 0;
-    cj->done = 0;
-    cj->refcount = 1;
-    KeInitializeEvent(&cj->event, NotificationEvent, false);
+void do_calc_job(device_extension* Vcb, uint8_t* data, uint32_t sectors, uint32_t* csum) {
+    KIRQL irql;
+    calc_job cj;
 
-    ExAcquireResourceExclusiveLite(&Vcb->calcthreads.lock, true);
+    cj.data = data;
+    cj.csum = csum;
+    cj.left = cj.not_started = sectors;
+    KeInitializeEvent(&cj.event, NotificationEvent, false);
 
-    InsertTailList(&Vcb->calcthreads.job_list, &cj->list_entry);
+    KeAcquireSpinLock(&Vcb->calcthreads.spinlock, &irql);
+
+    InsertTailList(&Vcb->calcthreads.job_list, &cj.list_entry);
 
     KeSetEvent(&Vcb->calcthreads.event, 0, false);
     KeClearEvent(&Vcb->calcthreads.event);
 
-    ExReleaseResourceLite(&Vcb->calcthreads.lock);
+    KeReleaseSpinLock(&Vcb->calcthreads.spinlock, irql);
 
-    *pcj = cj;
+    while (true) {
+        KIRQL irql;
+        uint8_t* src;
+        uint32_t* dest;
+        bool last_one = false;
 
-    return STATUS_SUCCESS;
-}
+        KeAcquireSpinLock(&Vcb->calcthreads.spinlock, &irql);
 
-void free_calc_job(calc_job* cj) {
-    LONG rc = InterlockedDecrement(&cj->refcount);
+        if (cj.not_started == 0) {
+            KeReleaseSpinLock(&Vcb->calcthreads.spinlock, irql);
+            break;
+        }
 
-    if (rc == 0)
-        ExFreePool(cj);
-}
+        src = cj.data;
+        cj.data += Vcb->superblock.sector_size;
 
-static bool do_calc(device_extension* Vcb, calc_job* cj) {
-    LONG pos, done;
-    uint32_t* csum;
-    uint8_t* data;
-    ULONG blocksize, i;
+        dest = cj.csum;
+        cj.csum++;
 
-    pos = InterlockedIncrement(&cj->pos) - 1;
+        cj.not_started--;
+        if (cj.not_started == 0) {
+            RemoveEntryList(&cj.list_entry);
+            last_one = true;
+        }
 
-    if ((uint32_t)pos * SECTOR_BLOCK >= cj->sectors)
-        return false;
+        KeReleaseSpinLock(&Vcb->calcthreads.spinlock, irql);
 
-    csum = &cj->csum[pos * SECTOR_BLOCK];
-    data = cj->data + (pos * SECTOR_BLOCK * Vcb->superblock.sector_size);
+        do_calc(Vcb, &cj, src, dest);
 
-    blocksize = min(SECTOR_BLOCK, cj->sectors - (pos * SECTOR_BLOCK));
-    for (i = 0; i < blocksize; i++) {
-        *csum = ~calc_crc32c(0xffffffff, data, Vcb->superblock.sector_size);
-        csum++;
-        data += Vcb->superblock.sector_size;
+        if (last_one)
+            break;
     }
 
-    done = InterlockedIncrement(&cj->done);
-
-    if ((uint32_t)done * SECTOR_BLOCK >= cj->sectors) {
-        ExAcquireResourceExclusiveLite(&Vcb->calcthreads.lock, true);
-        RemoveEntryList(&cj->list_entry);
-        ExReleaseResourceLite(&Vcb->calcthreads.lock);
-
-        KeSetEvent(&cj->event, 0, false);
-    }
-
-    return true;
+    KeWaitForSingleObject(&cj.event, Executive, KernelMode, false, NULL);
 }
 
 _Function_class_(KSTART_ROUTINE)
@@ -98,30 +87,45 @@ void __stdcall calc_thread(void* context) {
 
     ObReferenceObject(thread->DeviceObject);
 
+    KeSetSystemAffinityThread(1 << thread->number);
+
     while (true) {
         KeWaitForSingleObject(&Vcb->calcthreads.event, Executive, KernelMode, false, NULL);
 
         while (true) {
+            KIRQL irql;
             calc_job* cj;
-            bool b;
+            uint8_t* src;
+            uint32_t* dest;
+            bool last_one = false;
 
-            ExAcquireResourceExclusiveLite(&Vcb->calcthreads.lock, true);
+            KeAcquireSpinLock(&Vcb->calcthreads.spinlock, &irql);
 
             if (IsListEmpty(&Vcb->calcthreads.job_list)) {
-                ExReleaseResourceLite(&Vcb->calcthreads.lock);
+                KeReleaseSpinLock(&Vcb->calcthreads.spinlock, irql);
                 break;
             }
 
             cj = CONTAINING_RECORD(Vcb->calcthreads.job_list.Flink, calc_job, list_entry);
-            cj->refcount++;
 
-            ExReleaseResourceLite(&Vcb->calcthreads.lock);
+            src = cj->data;
+            cj->data += Vcb->superblock.sector_size;
 
-            b = do_calc(Vcb, cj);
+            dest = cj->csum;
+            cj->csum++;
 
-            free_calc_job(cj);
+            cj->not_started--;
 
-            if (!b)
+            if (cj->not_started == 0) {
+                RemoveEntryList(&cj->list_entry);
+                last_one = true;
+            }
+
+            KeReleaseSpinLock(&Vcb->calcthreads.spinlock, irql);
+
+            do_calc(Vcb, cj, src, dest);
+
+            if (last_one)
                 break;
         }
 

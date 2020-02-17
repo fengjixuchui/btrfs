@@ -80,6 +80,8 @@ static const uint64_t superblock_addrs[] = { 0x10000, 0x4000000, 0x4000000000, 0
 #define BLOCK_FLAG_RAID10       0x040
 #define BLOCK_FLAG_RAID5        0x080
 #define BLOCK_FLAG_RAID6        0x100
+#define BLOCK_FLAG_RAID1C3      0x200
+#define BLOCK_FLAG_RAID1C4      0x400
 
 #define FREE_SPACE_CACHE_ID     0xFFFFFFFFFFFFFFF5
 #define EXTENT_CSUM_ID          0xFFFFFFFFFFFFFFF6
@@ -238,7 +240,8 @@ typedef struct {
     char label[MAX_LABEL_SIZE];
     uint64_t cache_generation;
     uint64_t uuid_tree_generation;
-    uint64_t reserved[30];
+    BTRFS_UUID metadata_uuid;
+    uint64_t reserved[28];
     uint8_t sys_chunk_array[SYS_CHUNK_ARRAY_SIZE];
     superblock_backup backup[BTRFS_NUM_BACKUP_ROOTS];
     uint8_t reserved2[565];

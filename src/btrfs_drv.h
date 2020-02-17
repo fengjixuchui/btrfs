@@ -605,10 +605,8 @@ typedef struct {
 typedef struct {
     uint8_t* data;
     uint32_t* csum;
-    uint32_t sectors;
-    LONG pos, done;
+    LONG left, not_started;
     KEVENT event;
-    LONG refcount;
     LIST_ENTRY list_entry;
 } calc_job;
 
@@ -616,13 +614,14 @@ typedef struct {
     PDEVICE_OBJECT DeviceObject;
     HANDLE handle;
     KEVENT finished;
+    unsigned int number;
     bool quit;
 } drv_calc_thread;
 
 typedef struct {
     ULONG num_threads;
     LIST_ENTRY job_list;
-    ERESOURCE lock;
+    KSPIN_LOCK spinlock;
     drv_calc_thread* threads;
     KEVENT event;
 } drv_calc_threads;
@@ -1309,8 +1308,6 @@ NTSTATUS do_write_file(fcb* fcb, uint64_t start_data, uint64_t end_data, void* d
 NTSTATUS write_compressed(fcb* fcb, uint64_t start_data, uint64_t end_data, void* data, PIRP Irp, LIST_ENTRY* rollback);
 bool find_data_address_in_chunk(device_extension* Vcb, chunk* c, uint64_t length, uint64_t* address);
 void get_raid56_lock_range(chunk* c, uint64_t address, uint64_t length, uint64_t* lockaddr, uint64_t* locklen);
-NTSTATUS calc_csum(_In_ device_extension* Vcb, _In_reads_bytes_(sectors*Vcb->superblock.sector_size) uint8_t* data,
-                   _In_ uint32_t sectors, _Out_writes_bytes_(sectors*sizeof(uint32_t)) uint32_t* csum);
 void add_insert_extent_rollback(LIST_ENTRY* rollback, fcb* fcb, extent* ext);
 NTSTATUS add_extent_to_fcb(_In_ fcb* fcb, _In_ uint64_t offset, _In_reads_bytes_(edsize) EXTENT_DATA* ed, _In_ uint16_t edsize,
                            _In_ bool unique, _In_opt_ _When_(return >= 0, __drv_aliasesMem) uint32_t* csum, _In_ LIST_ENTRY* rollback);
@@ -1516,8 +1513,7 @@ NTSTATUS __stdcall drv_device_control(IN PDEVICE_OBJECT DeviceObject, IN PIRP Ir
 _Function_class_(KSTART_ROUTINE)
 void __stdcall calc_thread(void* context);
 
-NTSTATUS add_calc_job(device_extension* Vcb, uint8_t* data, uint32_t sectors, uint32_t* csum, calc_job** pcj);
-void free_calc_job(calc_job* cj);
+void do_calc_job(device_extension* Vcb, uint8_t* data, uint32_t sectors, uint32_t* csum);
 
 // in balance.c
 NTSTATUS start_balance(device_extension* Vcb, void* data, ULONG length, KPROCESSOR_MODE processor_mode);

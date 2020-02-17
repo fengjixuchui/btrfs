@@ -436,6 +436,18 @@ NTSTATUS alloc_chunk(device_extension* Vcb, uint64_t flags, chunk** pc, bool ful
         sub_stripes = 1;
         type = BLOCK_FLAG_RAID6;
         allowed_missing = 2;
+    } else if (flags & BLOCK_FLAG_RAID1C3) {
+        min_stripes = 3;
+        max_stripes = 3;
+        sub_stripes = 1;
+        type = BLOCK_FLAG_RAID1C3;
+        allowed_missing = 2;
+    } else if (flags & BLOCK_FLAG_RAID1C4) {
+        min_stripes = 4;
+        max_stripes = 4;
+        sub_stripes = 1;
+        type = BLOCK_FLAG_RAID1C4;
+        allowed_missing = 3;
     } else { // SINGLE
         min_stripes = 1;
         max_stripes = 1;
@@ -464,8 +476,7 @@ NTSTATUS alloc_chunk(device_extension* Vcb, uint64_t flags, chunk** pc, bool ful
         if (!find_new_dup_stripes(Vcb, stripes, max_stripe_size, full_size)) {
             Status = STATUS_DISK_FULL;
             goto end;
-        }
-        else
+        } else
             num_stripes = max_stripes;
     } else {
         for (i = 0; i < max_stripes; i++) {
@@ -532,7 +543,7 @@ NTSTATUS alloc_chunk(device_extension* Vcb, uint64_t flags, chunk** pc, bool ful
         }
     }
 
-    if (type == 0 || type == BLOCK_FLAG_DUPLICATE || type == BLOCK_FLAG_RAID1)
+    if (type == 0 || type == BLOCK_FLAG_DUPLICATE || type == BLOCK_FLAG_RAID1 || type == BLOCK_FLAG_RAID1C3 || type == BLOCK_FLAG_RAID1C4)
         factor = 1;
     else if (type == BLOCK_FLAG_RAID0)
         factor = num_stripes;
@@ -1939,7 +1950,7 @@ NTSTATUS write_data(_In_ device_extension* Vcb, _In_ uint64_t address, _In_reads
         }
 
         allowed_missing = 2;
-    } else {  // write same data to every location - SINGLE, DUP, RAID1
+    } else {  // write same data to every location - SINGLE, DUP, RAID1, RAID1C3, RAID1C4
         for (i = 0; i < c->chunk_item->num_stripes; i++) {
             stripes[i].start = address - c->offset;
             stripes[i].end = stripes[i].start + length;
@@ -2779,36 +2790,6 @@ static void remove_fcb_extent(fcb* fcb, extent* ext, LIST_ENTRY* rollback) {
     }
 }
 
-NTSTATUS calc_csum(_In_ device_extension* Vcb, _In_reads_bytes_(sectors*Vcb->superblock.sector_size) uint8_t* data,
-                   _In_ uint32_t sectors, _Out_writes_bytes_(sectors*sizeof(uint32_t)) uint32_t* csum) {
-    NTSTATUS Status;
-    calc_job* cj;
-
-    // From experimenting, it seems that 40 sectors is roughly the crossover
-    // point where offloading the crc32 calculation becomes worth it.
-
-    if (sectors < 40 || get_num_of_processors() < 2) {
-        ULONG j;
-
-        for (j = 0; j < sectors; j++) {
-            csum[j] = ~calc_crc32c(0xffffffff, data + (j * Vcb->superblock.sector_size), Vcb->superblock.sector_size);
-        }
-
-        return STATUS_SUCCESS;
-    }
-
-    Status = add_calc_job(Vcb, data, sectors, csum, &cj);
-    if (!NT_SUCCESS(Status)) {
-        ERR("add_calc_job returned %08x\n", Status);
-        return Status;
-    }
-
-    KeWaitForSingleObject(&cj->event, Executive, KernelMode, false, NULL);
-    free_calc_job(cj);
-
-    return STATUS_SUCCESS;
-}
-
 _Requires_lock_held_(c->lock)
 _When_(return != 0, _Releases_lock_(c->lock))
 bool insert_extent_chunk(_In_ device_extension* Vcb, _In_ fcb* fcb, _In_ chunk* c, _In_ uint64_t start_data, _In_ uint64_t length, _In_ bool prealloc, _In_opt_ void* data,
@@ -2855,13 +2836,7 @@ bool insert_extent_chunk(_In_ device_extension* Vcb, _In_ fcb* fcb, _In_ chunk* 
             return false;
         }
 
-        Status = calc_csum(Vcb, data, sl, csum);
-        if (!NT_SUCCESS(Status)) {
-            ERR("calc_csum returned %08x\n", Status);
-            ExFreePool(csum);
-            ExFreePool(ed);
-            return false;
-        }
+        do_calc_job(Vcb, data, sl, csum);
     }
 
     Status = add_extent_to_fcb(fcb, start_data, ed, edsize, true, csum, rollback);
@@ -3586,13 +3561,7 @@ static NTSTATUS do_write_file_prealloc(fcb* fcb, extent* ext, uint64_t start_dat
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            Status = calc_csum(fcb->Vcb, (uint8_t*)data + ext->offset - start_data, sl, csum);
-            if (!NT_SUCCESS(Status)) {
-                ERR("calc_csum returned %08x\n", Status);
-                ExFreePool(csum);
-                ExFreePool(newext);
-                return Status;
-            }
+            do_calc_job(fcb->Vcb, (uint8_t*)data + ext->offset - start_data, sl, csum);
 
             newext->csum = csum;
         } else
@@ -3659,14 +3628,7 @@ static NTSTATUS do_write_file_prealloc(fcb* fcb, extent* ext, uint64_t start_dat
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            Status = calc_csum(fcb->Vcb, (uint8_t*)data + ext->offset - start_data, sl, csum);
-            if (!NT_SUCCESS(Status)) {
-                ERR("calc_csum returned %08x\n", Status);
-                ExFreePool(newext1);
-                ExFreePool(newext2);
-                ExFreePool(csum);
-                return Status;
-            }
+            do_calc_job(fcb->Vcb, (uint8_t*)data + ext->offset - start_data, sl, csum);
 
             newext1->csum = csum;
         } else
@@ -3756,14 +3718,7 @@ static NTSTATUS do_write_file_prealloc(fcb* fcb, extent* ext, uint64_t start_dat
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            Status = calc_csum(fcb->Vcb, data, sl, csum);
-            if (!NT_SUCCESS(Status)) {
-                ERR("calc_csum returned %08x\n", Status);
-                ExFreePool(newext1);
-                ExFreePool(newext2);
-                ExFreePool(csum);
-                return Status;
-            }
+            do_calc_job(fcb->Vcb, data, sl, csum);
 
             newext2->csum = csum;
         } else
@@ -3868,15 +3823,7 @@ static NTSTATUS do_write_file_prealloc(fcb* fcb, extent* ext, uint64_t start_dat
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            Status = calc_csum(fcb->Vcb, data, sl, csum);
-            if (!NT_SUCCESS(Status)) {
-                ERR("calc_csum returned %08x\n", Status);
-                ExFreePool(newext1);
-                ExFreePool(newext2);
-                ExFreePool(newext3);
-                ExFreePool(csum);
-                return Status;
-            }
+            do_calc_job(fcb->Vcb, data, sl, csum);
 
             newext2->csum = csum;
         } else
@@ -4012,8 +3959,8 @@ NTSTATUS do_write_file(fcb* fcb, uint64_t start, uint64_t end_data, void* data, 
 
                     // This shouldn't ever get called - nocow files should always also be nosum.
                     if (!(fcb->inode_item.flags & BTRFS_INODE_NODATASUM)) {
-                        calc_csum(fcb->Vcb, (uint8_t*)data + written, (uint32_t)(write_len / fcb->Vcb->superblock.sector_size),
-                                  &ext->csum[(start + written - ext->offset) / fcb->Vcb->superblock.sector_size]);
+                        do_calc_job(fcb->Vcb, (uint8_t*)data + written, (uint32_t)(write_len / fcb->Vcb->superblock.sector_size),
+                                    &ext->csum[(start + written - ext->offset) / fcb->Vcb->superblock.sector_size]);
 
                         ext->inserted = true;
                         extents_changed = true;

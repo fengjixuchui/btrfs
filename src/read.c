@@ -83,26 +83,7 @@ static NTSTATUS __stdcall read_data_completion(PDEVICE_OBJECT DeviceObject, PIRP
 }
 
 NTSTATUS check_csum(device_extension* Vcb, uint8_t* data, uint32_t sectors, uint32_t* csum) {
-    NTSTATUS Status;
-    calc_job* cj;
     uint32_t* csum2;
-
-    // From experimenting, it seems that 40 sectors is roughly the crossover
-    // point where offloading the crc32 calculation becomes worth it.
-
-    if (sectors < 40 || get_num_of_processors() < 2) {
-        ULONG j;
-
-        for (j = 0; j < sectors; j++) {
-            uint32_t crc32 = ~calc_crc32c(0xffffffff, data + (j * Vcb->superblock.sector_size), Vcb->superblock.sector_size);
-
-            if (crc32 != csum[j]) {
-                return STATUS_CRC_ERROR;
-            }
-        }
-
-        return STATUS_SUCCESS;
-    }
 
     csum2 = ExAllocatePoolWithTag(PagedPool, sizeof(uint32_t) * sectors, ALLOC_TAG);
     if (!csum2) {
@@ -110,22 +91,13 @@ NTSTATUS check_csum(device_extension* Vcb, uint8_t* data, uint32_t sectors, uint
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    Status = add_calc_job(Vcb, data, sectors, csum2, &cj);
-    if (!NT_SUCCESS(Status)) {
-        ERR("add_calc_job returned %08x\n", Status);
-        ExFreePool(csum2);
-        return Status;
-    }
-
-    KeWaitForSingleObject(&cj->event, Executive, KernelMode, false, NULL);
+    do_calc_job(Vcb, data, sectors, csum2);
 
     if (RtlCompareMemory(csum2, csum, sectors * sizeof(uint32_t)) != sectors * sizeof(uint32_t)) {
-        free_calc_job(cj);
         ExFreePool(csum2);
         return STATUS_CRC_ERROR;
     }
 
-    free_calc_job(cj);
     ExFreePool(csum2);
 
     return STATUS_SUCCESS;
@@ -1508,6 +1480,12 @@ NTSTATUS read_data(_In_ device_extension* Vcb, _In_ uint64_t addr, _In_ uint32_t
     } else if (ci->type & BLOCK_FLAG_RAID6) {
         type = BLOCK_FLAG_RAID6;
         allowed_missing = 2;
+    } else if (ci->type & BLOCK_FLAG_RAID1C3) {
+        type = BLOCK_FLAG_DUPLICATE;
+        allowed_missing = 2;
+    } else if (ci->type & BLOCK_FLAG_RAID1C4) {
+        type = BLOCK_FLAG_DUPLICATE;
+        allowed_missing = 3;
     } else { // SINGLE
         type = BLOCK_FLAG_DUPLICATE;
         allowed_missing = 0;

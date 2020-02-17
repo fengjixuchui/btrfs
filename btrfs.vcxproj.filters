@@ -287,4 +287,10 @@
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <MASM Include="src\crc32c-amd64-masm.S">
+      <Filter>Source Files</Filter>
+    </MASM>
+    <MASM Include="src\crc32c-x86-masm.S" />
+  </ItemGroup>
 </Project>

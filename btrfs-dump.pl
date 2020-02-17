@@ -88,54 +88,64 @@ sub incompat_flags {
     my ($f)=@_;
     my @l;
 
-    if ($f&1) {
+    if ($f & 0x1) {
         push @l,"mixed_backref";
-        $f&=~1;
+        $f &= ~0x1;
     }
 
-    if ($f&2) {
+    if ($f & 0x2) {
         push @l,"default_subvol";
-        $f&=~2;
+        $f &= ~0x2;
     }
 
-    if ($f&4) {
+    if ($f & 0x4) {
         push @l,"mixed_groups";
-        $f&=~4;
+        $f &= ~0x4;
     }
 
-    if ($f&8) {
+    if ($f & 0x8) {
         push @l,"compress_lzo";
-        $f&=~8;
+        $f &= ~0x8;
     }
 
-    if ($f&16) {
+    if ($f & 0x10) {
         push @l,"compress_zstd";
-        $f&=~16;
+        $f &= ~0x10;
     }
 
-    if ($f&32) {
+    if ($f & 0x20) {
         push @l,"big_metadata";
-        $f&=~32;
+        $f &= ~0x20;
     }
 
-    if ($f&64) {
+    if ($f & 0x40) {
         push @l,"extended_iref";
-        $f&=~64;
+        $f &= ~0x40;
     }
 
-    if ($f&128) {
+    if ($f & 0x80) {
         push @l,"raid56";
-        $f&=~128;
+        $f &= ~0x80;
     }
 
-    if ($f&256) {
+    if ($f & 0x100) {
         push @l,"skinny_metadata";
-        $f&=~256;
+        $f &= ~0x100;
     }
 
-    if ($f&512) {
+    if ($f & 0x200) {
         push @l,"no_holes";
-        $f&=~512;
+        $f &= ~0x200;
+    }
+
+    if ($f & 0x400) {
+        push @l,"metadata_uuid";
+        $f &= ~0x400;
+    }
+
+    if ($f & 0x800) {
+        push @l,"raid1c34";
+        $f &= ~0x800;
     }
 
     if ($f!=0 || $#l==-1) {
@@ -173,7 +183,7 @@ sub read_superblock {
 	seek($f,0x10000,0);
 	read($f,$sb,0x1000);
 	($roottree, $chunktree, $logtree)=unpack("x80QQQ",$sb);
-	@b = unpack("A32A16QQA8QQQQQQQQQVVVVVQQQQvCCCA98A256QQx240a2048a672",$sb);
+	@b = unpack("A32A16QQA8QQQQQQQQQVVVVVQQQQvCCCA98A256QQA16x224a2048a672",$sb);
     @di = unpack("QQQVVVQQQVCCA16A16",$b[27]);
 
 	$csum_type = $b[23];
@@ -186,15 +196,15 @@ sub read_superblock {
 		$csum = sprintf("%08x", unpack("V", $b[0]));
 	}
 
-	printf("superblock csum=%s fsuuid=%s physaddr=%x flags=%x magic=%s gen=%x roottree=%x chunktree=%x logtree=%x log_root_transid=%x total_bytes=%x bytes_used=%x root_dir_objectid=%x num_devices=%x sectorsize=%x nodesize=%x leafsize=%x stripesize=%x n=%x chunk_root_generation=%x compat_flags=%x compat_ro_flags=%s incompat_flags=%s csum_type=%x root_level=%x chunk_root_level=%x log_root_level=%x (dev_item id=%x numbytes=%x bytesused=%x ioalign=%x iowidth=%x sectorsize=%x type=%x gen=%x startoff=%x devgroup=%x seekspeed=%x bandwidth=%x devid=%s fsid=%s) label=%s cache_gen=%x uuid_tree_gen=%x\n", $csum, format_uuid($b[1]), $b[2], $b[3], $b[4], $b[5], $b[6], $b[7], $b[8], $b[9], $b[10], $b[11], $b[12], $b[13], $b[14], $b[15], $b[16], $b[17], $b[18], $b[19], $b[20], compat_ro_flags($b[21]), incompat_flags($b[22]), $b[23], $b[24], $b[25], $b[26], $di[0], $di[1], $di[2], $di[3], $di[4], $di[5], $di[6], $di[7], $di[8], $di[9], $di[10], $di[11], format_uuid($di[12]), format_uuid($di[13]), $b[28], $b[29], $b[30]);
-	my $devid=format_uuid($di[12]);
+	printf("superblock csum=%s fsuuid=%s physaddr=%x flags=%x magic=%s gen=%x roottree=%x chunktree=%x logtree=%x log_root_transid=%x total_bytes=%x bytes_used=%x root_dir_objectid=%x num_devices=%x sectorsize=%x nodesize=%x leafsize=%x stripesize=%x n=%x chunk_root_generation=%x compat_flags=%x compat_ro_flags=%s incompat_flags=%s csum_type=%x root_level=%x chunk_root_level=%x log_root_level=%x (dev_item id=%x numbytes=%x bytesused=%x ioalign=%x iowidth=%x sectorsize=%x type=%x gen=%x startoff=%x devgroup=%x seekspeed=%x bandwidth=%x devid=%s fsid=%s) label=%s cache_gen=%x uuid_tree_gen=%x metadata_uuid=%s\n", $csum, format_uuid($b[1]), $b[2], $b[3], $b[4], $b[5], $b[6], $b[7], $b[8], $b[9], $b[10], $b[11], $b[12], $b[13], $b[14], $b[15], $b[16], $b[17], $b[18], $b[19], $b[20], compat_ro_flags($b[21]), incompat_flags($b[22]), $b[23], $b[24], $b[25], $b[26], $di[0], $di[1], $di[2], $di[3], $di[4], $di[5], $di[6], $di[7], $di[8], $di[9], $di[10], $di[11], format_uuid($di[12]), format_uuid($di[13]), $b[28], $b[29], $b[30], format_uuid($b[31]));
 
+	my $devid=format_uuid($di[12]);
 
 	$nodesize = $b[15];
 
 	$devs{$di[0]}=$f;
 
-	my $bootstrap=substr($b[31],0,$b[18]);
+	my $bootstrap=substr($b[32],0,$b[18]);
 
 	while (length($bootstrap)>0) {
 		#print Dumper($bootstrap)."\n";
@@ -221,7 +231,7 @@ sub read_superblock {
 		push @l2p_bs,\%obj;
 	}
 
-	my $backups=$b[32];
+	my $backups=$b[33];
 
     while (length($backups)>0) {
         my $backup=substr($backups,0,168);

@@ -748,11 +748,7 @@ static NTSTATUS scrub_extent_dup(device_extension* Vcb, chunk* c, uint64_t offse
                     return STATUS_INSUFFICIENT_RESOURCES;
                 }
 
-                Status = calc_csum(Vcb, context->stripes[i].buf, context->stripes[i].length / Vcb->superblock.sector_size, context->stripes[i].bad_csums);
-                if (!NT_SUCCESS(Status)) {
-                    ERR("calc_csum returned %08x\n", Status);
-                    return Status;
-                }
+                do_calc_job(Vcb, context->stripes[i].buf, context->stripes[i].length / Vcb->superblock.sector_size, context->stripes[i].bad_csums);
             } else {
                 ULONG j;
 
@@ -1220,11 +1216,7 @@ static NTSTATUS scrub_extent_raid10(device_extension* Vcb, chunk* c, uint64_t of
                                 goto end;
                             }
 
-                            Status = calc_csum(Vcb, context->stripes[j + k].buf, context->stripes[j + k].length / Vcb->superblock.sector_size, context->stripes[j + k].bad_csums);
-                            if (!NT_SUCCESS(Status)) {
-                                ERR("calc_csum returned %08x\n", Status);
-                                goto end;
-                            }
+                            do_calc_job(Vcb, context->stripes[j + k].buf, context->stripes[j + k].length / Vcb->superblock.sector_size, context->stripes[j + k].bad_csums);
                         }
                     }
                 } else {
@@ -2956,7 +2948,11 @@ static NTSTATUS scrub_chunk(device_extension* Vcb, chunk* c, uint64_t* offset, b
     } else if (c->chunk_item->type & BLOCK_FLAG_RAID6) {
         Status = scrub_chunk_raid56(Vcb, c, offset, changed);
         goto end;
-    } else // SINGLE
+    } else if (c->chunk_item->type & BLOCK_FLAG_RAID1C3)
+        type = BLOCK_FLAG_DUPLICATE;
+    else if (c->chunk_item->type & BLOCK_FLAG_RAID1C4)
+        type = BLOCK_FLAG_DUPLICATE;
+    else // SINGLE
         type = BLOCK_FLAG_DUPLICATE;
 
     searchkey.obj_id = *offset;
