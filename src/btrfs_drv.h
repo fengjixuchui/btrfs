@@ -192,6 +192,8 @@ _Create_lock_level_(tree_lock)
 _Create_lock_level_(fcb_lock)
 _Lock_level_order_(tree_lock, fcb_lock)
 
+#define MAX_HASH_SIZE 8
+
 struct _device_extension;
 
 typedef struct _fcb_nonpaged {
@@ -210,7 +212,7 @@ typedef struct {
     bool unique;
     bool ignore;
     bool inserted;
-    uint32_t* csum;
+    void* csum;
 
     LIST_ENTRY list_entry;
 
@@ -604,7 +606,7 @@ typedef struct {
 
 typedef struct {
     uint8_t* data;
-    uint32_t* csum;
+    void* csum;
     LONG left, not_started;
     KEVENT event;
     LIST_ENTRY list_entry;
@@ -728,6 +730,7 @@ typedef struct _device_extension {
 #endif
     uint64_t devices_loaded;
     superblock superblock;
+    unsigned int csum_size;
     bool readonly;
     bool removing;
     bool locked;
@@ -1119,6 +1122,7 @@ _Ret_maybenull_
 root* find_default_subvol(_In_ _Requires_lock_held_(_Curr_->tree_lock) device_extension* Vcb, _In_opt_ PIRP Irp);
 
 void do_shutdown(PIRP Irp);
+bool check_superblock_checksum(superblock* sb);
 
 #ifdef _MSC_VER
 #define funcname __FUNCTION__
@@ -1151,7 +1155,7 @@ extern uint32_t debug_log_level;
 
 #ifdef DEBUG_LONG_MESSAGES
 
-#define MSG(fn, file, line, s, level, ...) (!log_started || level <= debug_log_level) ? _debug_message(fn, file, line, s, ##__VA_ARGS__) : 0
+#define MSG(fn, file, line, s, level, ...) (!log_started || level <= debug_log_level) ? _debug_message(fn, file, line, s, ##__VA_ARGS__) : (void)0
 
 #define TRACE(s, ...) MSG(funcname, __FILE__, __LINE__, s, 3, ##__VA_ARGS__)
 #define WARN(s, ...) MSG(funcname, __FILE__, __LINE__, s, 2, ##__VA_ARGS__)
@@ -1162,7 +1166,7 @@ void _debug_message(_In_ const char* func, _In_ const char* file, _In_ unsigned 
 
 #else
 
-#define MSG(fn, s, level, ...) (!log_started || level <= debug_log_level) ? _debug_message(fn, s, ##__VA_ARGS__) : 0
+#define MSG(fn, s, level, ...) (!log_started || level <= debug_log_level) ? _debug_message(fn, s, ##__VA_ARGS__) : (void)0
 
 #define TRACE(s, ...) MSG(funcname, s, 3, ##__VA_ARGS__)
 #define WARN(s, ...) MSG(funcname, s, 2, ##__VA_ARGS__)
@@ -1310,7 +1314,7 @@ bool find_data_address_in_chunk(device_extension* Vcb, chunk* c, uint64_t length
 void get_raid56_lock_range(chunk* c, uint64_t address, uint64_t length, uint64_t* lockaddr, uint64_t* locklen);
 void add_insert_extent_rollback(LIST_ENTRY* rollback, fcb* fcb, extent* ext);
 NTSTATUS add_extent_to_fcb(_In_ fcb* fcb, _In_ uint64_t offset, _In_reads_bytes_(edsize) EXTENT_DATA* ed, _In_ uint16_t edsize,
-                           _In_ bool unique, _In_opt_ _When_(return >= 0, __drv_aliasesMem) uint32_t* csum, _In_ LIST_ENTRY* rollback);
+                           _In_ bool unique, _In_opt_ _When_(return >= 0, __drv_aliasesMem) void* csum, _In_ LIST_ENTRY* rollback);
 void add_extent(_In_ fcb* fcb, _In_ LIST_ENTRY* prevextle, _In_ __drv_aliasesMem extent* newext);
 
 // in dirctrl.c
@@ -1381,7 +1385,7 @@ NTSTATUS open_fileref(_Requires_lock_held_(_Curr_->tree_lock) _Requires_exclusiv
                       _In_ bool case_sensitive, _In_opt_ PIRP Irp);
 NTSTATUS open_fcb(_Requires_lock_held_(_Curr_->tree_lock) _Requires_exclusive_lock_held_(_Curr_->fcb_lock) device_extension* Vcb,
                   root* subvol, uint64_t inode, uint8_t type, PANSI_STRING utf8, bool always_add_hl, fcb* parent, fcb** pfcb, POOL_TYPE pooltype, PIRP Irp);
-NTSTATUS load_csum(_Requires_lock_held_(_Curr_->tree_lock) device_extension* Vcb, uint32_t* csum, uint64_t start, uint64_t length, PIRP Irp);
+NTSTATUS load_csum(_Requires_lock_held_(_Curr_->tree_lock) device_extension* Vcb, void* csum, uint64_t start, uint64_t length, PIRP Irp);
 NTSTATUS load_dir_children(_Requires_lock_held_(_Curr_->tree_lock) device_extension* Vcb, fcb* fcb, bool ignore_size, PIRP Irp);
 NTSTATUS add_dir_child(fcb* fcb, uint64_t inode, bool subvol, PANSI_STRING utf8, PUNICODE_STRING name, uint8_t type, dir_child** pdc);
 NTSTATUS open_fileref_child(_Requires_lock_held_(_Curr_->tree_lock) _Requires_exclusive_lock_held_(_Curr_->fcb_lock) _In_ device_extension* Vcb,
@@ -1413,13 +1417,14 @@ NTSTATUS write_data_phys(_In_ PDEVICE_OBJECT device, _In_ PFILE_OBJECT fileobj, 
                          _In_reads_bytes_(length) void* data, _In_ uint32_t length);
 bool is_tree_unique(device_extension* Vcb, tree* t, PIRP Irp);
 NTSTATUS do_tree_writes(device_extension* Vcb, LIST_ENTRY* tree_writes, bool no_free);
-void add_checksum_entry(device_extension* Vcb, uint64_t address, ULONG length, uint32_t* csum, PIRP Irp);
+void add_checksum_entry(device_extension* Vcb, uint64_t address, ULONG length, void* csum, PIRP Irp);
 bool find_metadata_address_in_chunk(device_extension* Vcb, chunk* c, uint64_t* address);
 void add_trim_entry_avoid_sb(device_extension* Vcb, device* dev, uint64_t address, uint64_t size);
 NTSTATUS insert_tree_item_batch(LIST_ENTRY* batchlist, device_extension* Vcb, root* r, uint64_t objid, uint8_t objtype, uint64_t offset,
                                 _In_opt_ _When_(return >= 0, __drv_aliasesMem) void* data, uint16_t datalen, enum batch_operation operation);
 NTSTATUS flush_partial_stripe(device_extension* Vcb, chunk* c, partial_stripe* ps);
 NTSTATUS update_dev_item(device_extension* Vcb, device* device, PIRP Irp);
+void calc_tree_checksum(device_extension* Vcb, tree_header* th);
 
 // in read.c
 
@@ -1427,14 +1432,18 @@ _Dispatch_type_(IRP_MJ_READ)
 _Function_class_(DRIVER_DISPATCH)
 NTSTATUS __stdcall drv_read(PDEVICE_OBJECT DeviceObject, PIRP Irp);
 
-NTSTATUS read_data(_In_ device_extension* Vcb, _In_ uint64_t addr, _In_ uint32_t length, _In_reads_bytes_opt_(length*sizeof(uint32_t)/Vcb->superblock.sector_size) uint32_t* csum,
+NTSTATUS read_data(_In_ device_extension* Vcb, _In_ uint64_t addr, _In_ uint32_t length, _In_reads_bytes_opt_(length*sizeof(uint32_t)/Vcb->superblock.sector_size) void* csum,
                    _In_ bool is_tree, _Out_writes_bytes_(length) uint8_t* buf, _In_opt_ chunk* c, _Out_opt_ chunk** pc, _In_opt_ PIRP Irp, _In_ uint64_t generation, _In_ bool file_read,
                    _In_ ULONG priority);
 NTSTATUS read_file(fcb* fcb, uint8_t* data, uint64_t start, uint64_t length, ULONG* pbr, PIRP Irp);
 NTSTATUS read_stream(fcb* fcb, uint8_t* data, uint64_t start, ULONG length, ULONG* pbr);
 NTSTATUS do_read(PIRP Irp, bool wait, ULONG* bytes_read);
-NTSTATUS check_csum(device_extension* Vcb, uint8_t* data, uint32_t sectors, uint32_t* csum);
+NTSTATUS check_csum(device_extension* Vcb, uint8_t* data, uint32_t sectors, void* csum);
 void raid6_recover2(uint8_t* sectors, uint16_t num_stripes, ULONG sector_size, uint16_t missing1, uint16_t missing2, uint8_t* out);
+void get_tree_checksum(device_extension* Vcb, tree_header* th, void* csum);
+bool check_tree_checksum(device_extension* Vcb, tree_header* th);
+void get_sector_csum(device_extension* Vcb, void* buf, void* csum);
+bool check_sector_csum(device_extension* Vcb, void* buf, void* csum);
 
 // in pnp.c
 
@@ -1513,7 +1522,7 @@ NTSTATUS __stdcall drv_device_control(IN PDEVICE_OBJECT DeviceObject, IN PIRP Ir
 _Function_class_(KSTART_ROUTINE)
 void __stdcall calc_thread(void* context);
 
-void do_calc_job(device_extension* Vcb, uint8_t* data, uint32_t sectors, uint32_t* csum);
+void do_calc_job(device_extension* Vcb, uint8_t* data, uint32_t sectors, void* csum);
 
 // in balance.c
 NTSTATUS start_balance(device_extension* Vcb, void* data, ULONG length, KPROCESSOR_MODE processor_mode);

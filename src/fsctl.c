@@ -182,7 +182,7 @@ static NTSTATUS snapshot_tree_copy(device_extension* Vcb, uint64_t addr, root* s
         }
     }
 
-    *((uint32_t*)buf) = ~calc_crc32c(0xffffffff, (uint8_t*)&th->fs_uuid, Vcb->superblock.node_size - sizeof(th->csum));
+    calc_tree_checksum(Vcb, th);
 
     KeInitializeEvent(&wtc.Event, NotificationEvent, false);
     InitializeListHead(&wtc.stripes);
@@ -2630,7 +2630,6 @@ static NTSTATUS is_device_part_of_mounted_btrfs_raid(PDEVICE_OBJECT devobj, PFIL
     NTSTATUS Status;
     ULONG to_read;
     superblock* sb;
-    uint32_t crc32;
     BTRFS_UUID fsuuid, devuuid;
     LIST_ENTRY* le;
 
@@ -2655,9 +2654,7 @@ static NTSTATUS is_device_part_of_mounted_btrfs_raid(PDEVICE_OBJECT devobj, PFIL
         return STATUS_SUCCESS;
     }
 
-    crc32 = ~calc_crc32c(0xffffffff, (uint8_t*)&sb->uuid, (ULONG)sizeof(superblock) - sizeof(sb->checksum));
-
-    if (crc32 != *((uint32_t*)sb->checksum)) {
+    if (!check_superblock_checksum(sb)) {
         TRACE("device has Btrfs magic, but invalid superblock checksum\n");
         ExFreePool(sb);
         return STATUS_SUCCESS;
@@ -3544,7 +3541,7 @@ static NTSTATUS duplicate_extents(device_extension* Vcb, PFILE_OBJECT FileObject
 
                     if (ext->csum) {
                         if (ext->extent_data.compression == BTRFS_COMPRESSION_NONE) {
-                            ext2->csum = ExAllocatePoolWithTag(PagedPool, (ULONG)(ed2d->num_bytes * sizeof(uint32_t) / Vcb->superblock.sector_size), ALLOC_TAG);
+                            ext2->csum = ExAllocatePoolWithTag(PagedPool, (ULONG)(ed2d->num_bytes * Vcb->csum_size / Vcb->superblock.sector_size), ALLOC_TAG);
                             if (!ext2->csum) {
                                 ERR("out of memory\n");
                                 Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -3552,10 +3549,10 @@ static NTSTATUS duplicate_extents(device_extension* Vcb, PFILE_OBJECT FileObject
                                 goto end;
                             }
 
-                            RtlCopyMemory(ext2->csum, &ext->csum[(ed2d->offset - ed2s->offset) / Vcb->superblock.sector_size],
-                                          (ULONG)(ed2d->num_bytes * sizeof(uint32_t) / Vcb->superblock.sector_size));
+                            RtlCopyMemory(ext2->csum, (uint8_t*)ext->csum + ((ed2d->offset - ed2s->offset) * Vcb->csum_size / Vcb->superblock.sector_size),
+                                          (ULONG)(ed2d->num_bytes * Vcb->csum_size / Vcb->superblock.sector_size));
                         } else {
-                            ext2->csum = ExAllocatePoolWithTag(PagedPool, (ULONG)(ed2d->size * sizeof(uint32_t) / Vcb->superblock.sector_size), ALLOC_TAG);
+                            ext2->csum = ExAllocatePoolWithTag(PagedPool, (ULONG)(ed2d->size * Vcb->csum_size / Vcb->superblock.sector_size), ALLOC_TAG);
                             if (!ext2->csum) {
                                 ERR("out of memory\n");
                                 Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -3563,7 +3560,7 @@ static NTSTATUS duplicate_extents(device_extension* Vcb, PFILE_OBJECT FileObject
                                 goto end;
                             }
 
-                            RtlCopyMemory(ext2->csum, ext->csum, (ULONG)(ed2s->size * sizeof(uint32_t) / Vcb->superblock.sector_size));
+                            RtlCopyMemory(ext2->csum, ext->csum, (ULONG)(ed2s->size * Vcb->csum_size / Vcb->superblock.sector_size));
                         }
                     } else
                         ext2->csum = NULL;
