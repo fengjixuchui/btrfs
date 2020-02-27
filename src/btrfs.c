@@ -21,6 +21,7 @@
 
 #include "btrfs_drv.h"
 #include "xxhash.h"
+#include "crc32c.h"
 #ifndef _MSC_VER
 #include <cpuid.h>
 #else
@@ -594,7 +595,7 @@ static void calculate_total_space(_In_ device_extension* Vcb, _Out_ uint64_t* to
         dfactor = 1;
     }
 
-    sectors_used = Vcb->superblock.bytes_used / Vcb->superblock.sector_size;
+    sectors_used = (Vcb->superblock.bytes_used / Vcb->superblock.sector_size) * nfactor / dfactor;
 
     *totalsize = (Vcb->superblock.total_bytes / Vcb->superblock.sector_size) * nfactor / dfactor;
     *freespace = sectors_used > *totalsize ? 0 : (*totalsize - sectors_used);
@@ -2748,6 +2749,32 @@ bool check_superblock_checksum(superblock* sb) {
             break;
         }
 
+        case CSUM_TYPE_SHA256: {
+            uint8_t hash[SHA256_HASH_SIZE];
+
+            calc_sha256(hash, &sb->uuid, sizeof(superblock) - sizeof(sb->checksum));
+
+            if (RtlCompareMemory(hash, sb, SHA256_HASH_SIZE) == SHA256_HASH_SIZE)
+                return true;
+
+            WARN("superblock hash was invalid\n");
+
+            break;
+        }
+
+        case CSUM_TYPE_BLAKE2: {
+            uint8_t hash[BLAKE2_HASH_SIZE];
+
+            blake2b(hash, sizeof(hash), &sb->uuid, sizeof(superblock) - sizeof(sb->checksum));
+
+            if (RtlCompareMemory(hash, sb, BLAKE2_HASH_SIZE) == BLAKE2_HASH_SIZE)
+                return true;
+
+            WARN("superblock hash was invalid\n");
+
+            break;
+        }
+
         default:
             WARN("unrecognized csum type %x\n", sb->csum_type);
     }
@@ -4517,6 +4544,14 @@ static NTSTATUS mount_vol(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp) {
             Vcb->csum_size = sizeof(uint64_t);
             break;
 
+        case CSUM_TYPE_SHA256:
+            Vcb->csum_size = SHA256_HASH_SIZE;
+            break;
+
+        case CSUM_TYPE_BLAKE2:
+            Vcb->csum_size = BLAKE2_HASH_SIZE;
+            break;
+
         default:
             ERR("unrecognized csum type %x\n", Vcb->superblock.csum_type);
             break;
@@ -4796,6 +4831,9 @@ static NTSTATUS mount_vol(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp) {
     fcb_get_sd(root_fcb, NULL, true, Irp);
 
     root_fcb->atts = get_file_attributes(Vcb, root_fcb->subvol, root_fcb->inode, root_fcb->type, false, false, Irp);
+
+    if (root_fcb->subvol->id == BTRFS_ROOT_FSTREE)
+        root_fcb->atts &= ~FILE_ATTRIBUTE_HIDDEN;
 
     Vcb->root_fileref = create_fileref(Vcb);
     if (!Vcb->root_fileref) {

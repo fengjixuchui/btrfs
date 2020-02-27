@@ -17,6 +17,7 @@
 
 #include "btrfs_drv.h"
 #include "xxhash.h"
+#include "crc32c.h"
 #include <ata.h>
 #include <ntddscsi.h>
 #include <ntddstor.h>
@@ -1797,6 +1798,14 @@ void calc_tree_checksum(device_extension* Vcb, tree_header* th) {
         case CSUM_TYPE_XXHASH:
             *((uint64_t*)th) = XXH64((uint8_t*)&th->fs_uuid, Vcb->superblock.node_size - sizeof(th->csum), 0);
         break;
+
+        case CSUM_TYPE_SHA256:
+            calc_sha256((uint8_t*)th, &th->fs_uuid, Vcb->superblock.node_size - sizeof(th->csum));
+        break;
+
+        case CSUM_TYPE_BLAKE2:
+            blake2b((uint8_t*)th, BLAKE2_HASH_SIZE, &th->fs_uuid, Vcb->superblock.node_size - sizeof(th->csum));
+        break;
     }
 }
 
@@ -2193,6 +2202,14 @@ static void calc_superblock_checksum(superblock* sb) {
 
         case CSUM_TYPE_XXHASH:
             *(uint64_t*)sb = XXH64(&sb->uuid, sizeof(superblock) - sizeof(sb->checksum), 0);
+        break;
+
+        case CSUM_TYPE_SHA256:
+            calc_sha256((uint8_t*)sb, &sb->uuid, sizeof(superblock) - sizeof(sb->checksum));
+        break;
+
+        case CSUM_TYPE_BLAKE2:
+            blake2b((uint8_t*)sb, BLAKE2_HASH_SIZE, &sb->uuid, sizeof(superblock) - sizeof(sb->checksum));
         break;
     }
 }
@@ -2739,7 +2756,7 @@ void add_checksum_entry(device_extension* Vcb, uint64_t address, ULONG length, v
                 void* data;
 
                 if (runlength * Vcb->csum_size > MAX_CSUM_SIZE)
-                    rl = MAX_CSUM_SIZE / Vcb->csum_size;
+                    rl = (uint16_t)(MAX_CSUM_SIZE / Vcb->csum_size);
                 else
                     rl = (uint16_t)runlength;
 
@@ -5637,6 +5654,28 @@ static NTSTATUS drop_chunk(device_extension* Vcb, chunk* c, LIST_ENTRY* batchlis
 
         if (clear_flag)
             Vcb->superblock.incompat_flags &= ~BTRFS_INCOMPAT_FLAGS_RAID56;
+    }
+
+    // clear raid1c34 incompat flag if dropping last RAID5/6 chunk
+
+    if (c->chunk_item->type & BLOCK_FLAG_RAID1C3 || c->chunk_item->type & BLOCK_FLAG_RAID1C4) {
+        LIST_ENTRY* le;
+        bool clear_flag = true;
+
+        le = Vcb->chunks.Flink;
+        while (le != &Vcb->chunks) {
+            chunk* c2 = CONTAINING_RECORD(le, chunk, list_entry);
+
+            if (c2->chunk_item->type & BLOCK_FLAG_RAID1C3 || c2->chunk_item->type & BLOCK_FLAG_RAID1C4) {
+                clear_flag = false;
+                break;
+            }
+
+            le = le->Flink;
+        }
+
+        if (clear_flag)
+            Vcb->superblock.incompat_flags &= ~BTRFS_INCOMPAT_FLAGS_RAID1C34;
     }
 
     uint64_t phys_used = chunk_estimate_phys_size(Vcb, c, c->oldused);

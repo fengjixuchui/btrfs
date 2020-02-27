@@ -17,6 +17,7 @@
 
 #include "btrfs_drv.h"
 #include "xxhash.h"
+#include "crc32c.h"
 
 enum read_data_status {
     ReadDataStatus_Pending,
@@ -113,6 +114,14 @@ void get_tree_checksum(device_extension* Vcb, tree_header* th, void* csum) {
         case CSUM_TYPE_XXHASH:
             *(uint64_t*)csum = XXH64((uint8_t*)&th->fs_uuid, Vcb->superblock.node_size - sizeof(th->csum), 0);
         break;
+
+        case CSUM_TYPE_SHA256:
+            calc_sha256(csum, &th->fs_uuid, Vcb->superblock.node_size - sizeof(th->csum));
+        break;
+
+        case CSUM_TYPE_BLAKE2:
+            blake2b(csum, BLAKE2_HASH_SIZE, (uint8_t*)&th->fs_uuid, Vcb->superblock.node_size - sizeof(th->csum));
+        break;
     }
 }
 
@@ -139,6 +148,32 @@ bool check_tree_checksum(device_extension* Vcb, tree_header* th) {
 
             break;
         }
+
+        case CSUM_TYPE_SHA256: {
+            uint8_t hash[SHA256_HASH_SIZE];
+
+            calc_sha256(hash, (uint8_t*)&th->fs_uuid, Vcb->superblock.node_size - sizeof(th->csum));
+
+            if (RtlCompareMemory(hash, th, SHA256_HASH_SIZE) == SHA256_HASH_SIZE)
+                return true;
+
+            WARN("hash was invalid\n");
+
+            break;
+        }
+
+        case CSUM_TYPE_BLAKE2: {
+            uint8_t hash[BLAKE2_HASH_SIZE];
+
+            blake2b(hash, sizeof(hash), (uint8_t*)&th->fs_uuid, Vcb->superblock.node_size - sizeof(th->csum));
+
+            if (RtlCompareMemory(hash, th, BLAKE2_HASH_SIZE) == BLAKE2_HASH_SIZE)
+                return true;
+
+            WARN("hash was invalid\n");
+
+            break;
+        }
     }
 
     return false;
@@ -152,6 +187,14 @@ void get_sector_csum(device_extension* Vcb, void* buf, void* csum) {
 
         case CSUM_TYPE_XXHASH:
             *(uint64_t*)csum = XXH64(buf, Vcb->superblock.sector_size, 0);
+        break;
+
+        case CSUM_TYPE_SHA256:
+            calc_sha256(csum, buf, Vcb->superblock.sector_size);
+        break;
+
+        case CSUM_TYPE_BLAKE2:
+            blake2b(csum, BLAKE2_HASH_SIZE, buf, Vcb->superblock.sector_size);
         break;
     }
 }
@@ -168,6 +211,22 @@ bool check_sector_csum(device_extension* Vcb, void* buf, void* csum) {
             uint64_t hash = XXH64(buf, Vcb->superblock.sector_size, 0);
 
             return *(uint64_t*)csum == hash;
+        }
+
+        case CSUM_TYPE_SHA256: {
+            uint8_t hash[SHA256_HASH_SIZE];
+
+            calc_sha256(hash, buf, Vcb->superblock.sector_size);
+
+            return RtlCompareMemory(hash, csum, SHA256_HASH_SIZE) == SHA256_HASH_SIZE;
+        }
+
+        case CSUM_TYPE_BLAKE2: {
+            uint8_t hash[BLAKE2_HASH_SIZE];
+
+            blake2b(hash, sizeof(hash), buf, Vcb->superblock.sector_size);
+
+            return RtlCompareMemory(hash, csum, BLAKE2_HASH_SIZE) == BLAKE2_HASH_SIZE;
         }
     }
 
@@ -2712,13 +2771,47 @@ NTSTATUS read_stream(fcb* fcb, uint8_t* data, uint64_t start, ULONG length, ULON
     return STATUS_SUCCESS;
 }
 
+typedef struct {
+    uint64_t off;
+    uint64_t ed_size;
+    uint64_t ed_offset;
+    uint64_t ed_num_bytes;
+} read_part_extent;
+
+typedef struct {
+    LIST_ENTRY list_entry;
+    uint64_t addr;
+    chunk* c;
+    uint32_t read;
+    uint32_t to_read;
+    void* csum;
+    bool csum_free;
+    uint8_t* buf;
+    bool buf_free;
+    uint32_t bumpoff;
+    bool mdl;
+    void* data;
+    uint8_t compression;
+    unsigned int num_extents;
+    read_part_extent extents[1];
+} read_part;
+
+typedef struct {
+    LIST_ENTRY list_entry;
+    calc_job* cj;
+    void* decomp;
+    void* data;
+    unsigned int offset;
+    size_t length;
+} comp_calc_job;
+
 NTSTATUS read_file(fcb* fcb, uint8_t* data, uint64_t start, uint64_t length, ULONG* pbr, PIRP Irp) {
     NTSTATUS Status;
-    EXTENT_DATA* ed;
     uint32_t bytes_read = 0;
     uint64_t last_end;
     LIST_ENTRY* le;
     POOL_TYPE pool_type;
+    LIST_ENTRY read_parts, calc_jobs;
 
     TRACE("(%p, %p, %I64x, %I64x, %p)\n", fcb, data, start, length, pbr);
 
@@ -2731,6 +2824,9 @@ NTSTATUS read_file(fcb* fcb, uint8_t* data, uint64_t start, uint64_t length, ULO
         goto exit;
     }
 
+    InitializeListHead(&read_parts);
+    InitializeListHead(&calc_jobs);
+
     pool_type = fcb->Header.Flags2 & FSRTL_FLAG2_IS_PAGING_FILE ? NonPagedPool : PagedPool;
 
     le = fcb->extents.Flink;
@@ -2740,12 +2836,10 @@ NTSTATUS read_file(fcb* fcb, uint8_t* data, uint64_t start, uint64_t length, ULO
     while (le != &fcb->extents) {
         uint64_t len;
         extent* ext = CONTAINING_RECORD(le, extent, list_entry);
-        EXTENT_DATA2* ed2;
 
         if (!ext->ignore) {
-            ed = &ext->extent_data;
-
-            ed2 = (ed->type == EXTENT_TYPE_REGULAR || ed->type == EXTENT_TYPE_PREALLOC) ? (EXTENT_DATA2*)ed->data : NULL;
+            EXTENT_DATA* ed = &ext->extent_data;
+            EXTENT_DATA2* ed2 = (ed->type == EXTENT_TYPE_REGULAR || ed->type == EXTENT_TYPE_PREALLOC) ? (EXTENT_DATA2*)ed->data : NULL;
 
             len = ed2 ? ed2->num_bytes : ed->decoded_size;
 
@@ -2863,193 +2957,87 @@ NTSTATUS read_file(fcb* fcb, uint8_t* data, uint64_t start, uint64_t length, ULO
 
                 case EXTENT_TYPE_REGULAR:
                 {
-                    uint64_t off = start + bytes_read - ext->offset;
-                    uint32_t to_read, read;
-                    uint8_t* buf;
-                    bool mdl = (Irp && Irp->MdlAddress) ? true : false;
-                    bool buf_free;
-                    uint32_t bumpoff = 0;
-                    void* csum;
-                    uint64_t addr;
-                    chunk* c;
+                    read_part* rp;
 
-                    read = (uint32_t)(len - off);
-                    if (read > length) read = (uint32_t)length;
+                    rp = ExAllocatePoolWithTag(pool_type, sizeof(read_part), ALLOC_TAG);
+                    if (!rp) {
+                        ERR("out of memory\n");
+                        Status = STATUS_INSUFFICIENT_RESOURCES;
+                        goto exit;
+                    }
+
+                    rp->mdl = (Irp && Irp->MdlAddress) ? true : false;
+                    rp->extents[0].off = start + bytes_read - ext->offset;
+                    rp->bumpoff = 0;
+                    rp->num_extents = 1;
+                    rp->csum_free = false;
+
+                    rp->read = (uint32_t)(len - rp->extents[0].off);
+                    if (rp->read > length) rp->read = (uint32_t)length;
 
                     if (ed->compression == BTRFS_COMPRESSION_NONE) {
-                        addr = ed2->address + ed2->offset + off;
-                        to_read = (uint32_t)sector_align(read, fcb->Vcb->superblock.sector_size);
+                        rp->addr = ed2->address + ed2->offset + rp->extents[0].off;
+                        rp->to_read = (uint32_t)sector_align(rp->read, fcb->Vcb->superblock.sector_size);
 
-                        if (addr % fcb->Vcb->superblock.sector_size > 0) {
-                            bumpoff = addr % fcb->Vcb->superblock.sector_size;
-                            addr -= bumpoff;
-                            to_read = (uint32_t)sector_align(read + bumpoff, fcb->Vcb->superblock.sector_size);
+                        if (rp->addr % fcb->Vcb->superblock.sector_size > 0) {
+                            rp->bumpoff = rp->addr % fcb->Vcb->superblock.sector_size;
+                            rp->addr -= rp->bumpoff;
+                            rp->to_read = (uint32_t)sector_align(rp->read + rp->bumpoff, fcb->Vcb->superblock.sector_size);
                         }
                     } else {
-                        addr = ed2->address;
-                        to_read = (uint32_t)sector_align(ed2->size, fcb->Vcb->superblock.sector_size);
+                        rp->addr = ed2->address;
+                        rp->to_read = (uint32_t)sector_align(ed2->size, fcb->Vcb->superblock.sector_size);
                     }
 
                     if (ed->compression == BTRFS_COMPRESSION_NONE && start % fcb->Vcb->superblock.sector_size == 0 &&
                         length % fcb->Vcb->superblock.sector_size == 0) {
-                        buf = data + bytes_read;
-                        buf_free = false;
+                        rp->buf = data + bytes_read;
+                        rp->buf_free = false;
                     } else {
-                        buf = ExAllocatePoolWithTag(pool_type, to_read, ALLOC_TAG);
-                        buf_free = true;
+                        rp->buf = ExAllocatePoolWithTag(pool_type, rp->to_read, ALLOC_TAG);
+                        rp->buf_free = true;
 
-                        if (!buf) {
+                        if (!rp->buf) {
                             ERR("out of memory\n");
                             Status = STATUS_INSUFFICIENT_RESOURCES;
+                            ExFreePool(rp);
                             goto exit;
                         }
 
-                        mdl = false;
+                        rp->mdl = false;
                     }
 
-                    c = get_chunk_from_address(fcb->Vcb, addr);
+                    rp->c = get_chunk_from_address(fcb->Vcb, rp->addr);
 
-                    if (!c) {
-                        ERR("get_chunk_from_address(%I64x) failed\n", addr);
+                    if (!rp->c) {
+                        ERR("get_chunk_from_address(%I64x) failed\n", rp->addr);
 
-                        if (buf_free)
-                            ExFreePool(buf);
+                        if (rp->buf_free)
+                            ExFreePool(rp->buf);
+
+                        ExFreePool(rp);
 
                         goto exit;
                     }
 
                     if (ext->csum) {
                         if (ed->compression == BTRFS_COMPRESSION_NONE) {
-                            csum = (uint8_t*)ext->csum + (off * fcb->Vcb->csum_size / fcb->Vcb->superblock.sector_size);
+                            rp->csum = (uint8_t*)ext->csum + (rp->extents[0].off * fcb->Vcb->csum_size / fcb->Vcb->superblock.sector_size);
                         } else
-                            csum = ext->csum;
+                            rp->csum = ext->csum;
                     } else
-                        csum = NULL;
+                        rp->csum = NULL;
 
-                    Status = read_data(fcb->Vcb, addr, to_read, csum, false, buf, c, NULL, Irp, 0, mdl,
-                                       fcb && fcb->Header.Flags2 & FSRTL_FLAG2_IS_PAGING_FILE ? HighPagePriority : NormalPagePriority);
-                    if (!NT_SUCCESS(Status)) {
-                        ERR("read_data returned %08x\n", Status);
+                    rp->data = data + bytes_read;
+                    rp->compression = ed->compression;
+                    rp->extents[0].ed_offset = ed2->offset;
+                    rp->extents[0].ed_size = ed2->size;
+                    rp->extents[0].ed_num_bytes = ed2->num_bytes;
 
-                        if (buf_free)
-                            ExFreePool(buf);
+                    InsertTailList(&read_parts, &rp->list_entry);
 
-                        goto exit;
-                    }
-
-                    if (ed->compression == BTRFS_COMPRESSION_NONE) {
-                        if (buf_free)
-                            RtlCopyMemory(data + bytes_read, buf + bumpoff, read);
-                    } else {
-                        uint8_t *decomp = NULL, *buf2;
-                        ULONG outlen, inlen, off2;
-                        uint32_t inpageoff = 0;
-
-                        off2 = (ULONG)(ed2->offset + off);
-                        buf2 = buf;
-                        inlen = (ULONG)ed2->size;
-
-                        if (ed->compression == BTRFS_COMPRESSION_LZO) {
-                            ULONG inoff = sizeof(uint32_t);
-
-                            inlen -= sizeof(uint32_t);
-
-                            // If reading a few sectors in, skip to the interesting bit
-                            while (off2 > LZO_PAGE_SIZE) {
-                                uint32_t partlen;
-
-                                if (inlen < sizeof(uint32_t))
-                                    break;
-
-                                partlen = *(uint32_t*)(buf2 + inoff);
-
-                                if (partlen < inlen) {
-                                    off2 -= LZO_PAGE_SIZE;
-                                    inoff += partlen + sizeof(uint32_t);
-                                    inlen -= partlen + sizeof(uint32_t);
-
-                                    if (LZO_PAGE_SIZE - (inoff % LZO_PAGE_SIZE) < sizeof(uint32_t))
-                                        inoff = ((inoff / LZO_PAGE_SIZE) + 1) * LZO_PAGE_SIZE;
-                                } else
-                                    break;
-                            }
-
-                            buf2 = &buf2[inoff];
-                            inpageoff = inoff % LZO_PAGE_SIZE;
-                        }
-
-                        if (off2 != 0) {
-                            outlen = off2 + min(read, (uint32_t)(ed2->num_bytes - off));
-
-                            decomp = ExAllocatePoolWithTag(pool_type, outlen, ALLOC_TAG);
-                            if (!decomp) {
-                                ERR("out of memory\n");
-                                ExFreePool(buf);
-                                Status = STATUS_INSUFFICIENT_RESOURCES;
-                                goto exit;
-                            }
-                        } else
-                            outlen = min(read, (uint32_t)(ed2->num_bytes - off));
-
-                        if (ed->compression == BTRFS_COMPRESSION_ZLIB) {
-                            Status = zlib_decompress(buf2, inlen, decomp ? decomp : (data + bytes_read), outlen);
-
-                            if (!NT_SUCCESS(Status)) {
-                                ERR("zlib_decompress returned %08x\n", Status);
-                                ExFreePool(buf);
-
-                                if (decomp)
-                                    ExFreePool(decomp);
-
-                                goto exit;
-                            }
-                        } else if (ed->compression == BTRFS_COMPRESSION_LZO) {
-                            Status = lzo_decompress(buf2, inlen, decomp ? decomp : (data + bytes_read), outlen, inpageoff);
-
-                            if (!NT_SUCCESS(Status)) {
-                                ERR("lzo_decompress returned %08x\n", Status);
-                                ExFreePool(buf);
-
-                                if (decomp)
-                                    ExFreePool(decomp);
-
-                                goto exit;
-                            }
-                        } else if (ed->compression == BTRFS_COMPRESSION_ZSTD) {
-                            Status = zstd_decompress(buf2, inlen, decomp ? decomp : (data + bytes_read), outlen);
-
-                            if (!NT_SUCCESS(Status)) {
-                                ERR("zstd_decompress returned %08x\n", Status);
-                                ExFreePool(buf);
-
-                                if (decomp)
-                                    ExFreePool(decomp);
-
-                                goto exit;
-                            }
-                        } else {
-                            ERR("unsupported compression type %x\n", ed->compression);
-                            Status = STATUS_NOT_SUPPORTED;
-
-                            ExFreePool(buf);
-
-                            if (decomp)
-                                ExFreePool(decomp);
-
-                            goto exit;
-                        }
-
-                        if (decomp) {
-                            RtlCopyMemory(data + bytes_read, decomp + off2, (size_t)min(read, ed2->num_bytes - off));
-                            ExFreePool(decomp);
-                        }
-                    }
-
-                    if (buf_free)
-                        ExFreePool(buf);
-
-                    bytes_read += read;
-                    length -= read;
+                    bytes_read += rp->read;
+                    length -= rp->read;
 
                     break;
                 }
@@ -3085,6 +3073,207 @@ nextitem:
         le = le->Flink;
     }
 
+    if (!IsListEmpty(&read_parts) && read_parts.Flink->Flink != &read_parts) { // at least two entries in list
+        read_part* last_rp = CONTAINING_RECORD(read_parts.Flink, read_part, list_entry);
+
+        le = read_parts.Flink->Flink;
+        while (le != &read_parts) {
+            LIST_ENTRY* le2 = le->Flink;
+            read_part* rp = CONTAINING_RECORD(le, read_part, list_entry);
+
+            // merge together runs
+            if (rp->compression != BTRFS_COMPRESSION_NONE && rp->compression == last_rp->compression && rp->addr == last_rp->addr + last_rp->to_read &&
+                rp->data == (uint8_t*)last_rp->data + last_rp->read && rp->c == last_rp->c && ((rp->csum && last_rp->csum) || (!rp->csum && !last_rp->csum))) {
+                read_part* rp2;
+
+                rp2 = ExAllocatePoolWithTag(pool_type, offsetof(read_part, extents) + (sizeof(read_part_extent) * (last_rp->num_extents + 1)), ALLOC_TAG);
+
+                rp2->addr = last_rp->addr;
+                rp2->c = last_rp->c;
+                rp2->read = last_rp->read + rp->read;
+                rp2->to_read = last_rp->to_read + rp->to_read;
+                rp2->csum_free = false;
+
+                if (last_rp->csum) {
+                    uint32_t sectors = (last_rp->to_read + rp->to_read) / fcb->Vcb->superblock.sector_size;
+
+                    rp2->csum = ExAllocatePoolWithTag(pool_type, sectors * fcb->Vcb->csum_size, ALLOC_TAG);
+                    if (!rp2->csum) {
+                        ERR("out of memory\n");
+                        ExFreePool(rp2);
+                        Status = STATUS_INSUFFICIENT_RESOURCES;
+                        goto exit;
+                    }
+
+                    RtlCopyMemory(rp2->csum, last_rp->csum, last_rp->to_read * fcb->Vcb->csum_size / fcb->Vcb->superblock.sector_size);
+                    RtlCopyMemory((uint8_t*)rp2->csum + (last_rp->to_read * fcb->Vcb->csum_size / fcb->Vcb->superblock.sector_size), rp->csum,
+                                  rp->to_read * fcb->Vcb->csum_size / fcb->Vcb->superblock.sector_size);
+
+                    rp2->csum_free = true;
+                } else
+                    rp2->csum = NULL;
+
+                rp2->buf = ExAllocatePoolWithTag(pool_type, rp2->to_read, ALLOC_TAG);
+                if (!rp2->buf) {
+                    ERR("out of memory\n");
+
+                    if (rp2->csum)
+                        ExFreePool(rp2->csum);
+
+                    ExFreePool(rp2);
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    goto exit;
+                }
+
+                rp2->buf_free = true;
+                rp2->bumpoff = 0;
+                rp2->mdl = false;
+                rp2->data = last_rp->data;
+                rp2->compression = last_rp->compression;
+                rp2->num_extents = last_rp->num_extents + 1;
+
+                RtlCopyMemory(rp2->extents, last_rp->extents, last_rp->num_extents * sizeof(read_part_extent));
+                RtlCopyMemory(&rp2->extents[last_rp->num_extents], rp->extents, sizeof(read_part_extent));
+
+                InsertHeadList(le->Blink, &rp2->list_entry);
+
+                if (rp->buf_free)
+                    ExFreePool(rp->buf);
+
+                if (rp->csum_free)
+                    ExFreePool(rp->csum);
+
+                RemoveEntryList(&rp->list_entry);
+
+                ExFreePool(rp);
+
+                if (last_rp->buf_free)
+                    ExFreePool(last_rp->buf);
+
+                if (last_rp->csum_free)
+                    ExFreePool(last_rp->csum);
+
+                RemoveEntryList(&last_rp->list_entry);
+
+                ExFreePool(last_rp);
+
+                last_rp = rp2;
+            } else
+                last_rp = rp;
+
+            le = le2;
+        }
+    }
+
+    le = read_parts.Flink;
+    while (le != &read_parts) {
+        read_part* rp = CONTAINING_RECORD(le, read_part, list_entry);
+
+        Status = read_data(fcb->Vcb, rp->addr, rp->to_read, rp->csum, false, rp->buf, rp->c, NULL, Irp, 0, rp->mdl,
+                           fcb && fcb->Header.Flags2 & FSRTL_FLAG2_IS_PAGING_FILE ? HighPagePriority : NormalPagePriority);
+        if (!NT_SUCCESS(Status)) {
+            ERR("read_data returned %08x\n", Status);
+            goto exit;
+        }
+
+        if (rp->compression == BTRFS_COMPRESSION_NONE) {
+            if (rp->buf_free)
+                RtlCopyMemory(rp->data, rp->buf + rp->bumpoff, rp->read);
+        } else {
+            uint8_t* buf = rp->buf;
+
+            for (unsigned int i = 0; i < rp->num_extents; i++) {
+                uint8_t *decomp = NULL, *buf2;
+                ULONG outlen, inlen, off2;
+                uint32_t inpageoff = 0;
+                comp_calc_job* ccj;
+
+                off2 = (ULONG)(rp->extents[i].ed_offset + rp->extents[i].off);
+                buf2 = buf;
+                inlen = (ULONG)rp->extents[i].ed_size;
+
+                if (rp->compression == BTRFS_COMPRESSION_LZO) {
+                    ULONG inoff = sizeof(uint32_t);
+
+                    inlen -= sizeof(uint32_t);
+
+                    // If reading a few sectors in, skip to the interesting bit
+                    while (off2 > LZO_PAGE_SIZE) {
+                        uint32_t partlen;
+
+                        if (inlen < sizeof(uint32_t))
+                            break;
+
+                        partlen = *(uint32_t*)(buf2 + inoff);
+
+                        if (partlen < inlen) {
+                            off2 -= LZO_PAGE_SIZE;
+                            inoff += partlen + sizeof(uint32_t);
+                            inlen -= partlen + sizeof(uint32_t);
+
+                            if (LZO_PAGE_SIZE - (inoff % LZO_PAGE_SIZE) < sizeof(uint32_t))
+                                inoff = ((inoff / LZO_PAGE_SIZE) + 1) * LZO_PAGE_SIZE;
+                        } else
+                            break;
+                    }
+
+                    buf2 = &buf2[inoff];
+                    inpageoff = inoff % LZO_PAGE_SIZE;
+                }
+
+                if (off2 != 0) {
+                    outlen = off2 + min(rp->read, (uint32_t)(rp->extents[i].ed_num_bytes - rp->extents[i].off));
+
+                    decomp = ExAllocatePoolWithTag(pool_type, outlen, ALLOC_TAG);
+                    if (!decomp) {
+                        ERR("out of memory\n");
+                        Status = STATUS_INSUFFICIENT_RESOURCES;
+                        goto exit;
+                    }
+                } else
+                    outlen = min(rp->read, (uint32_t)(rp->extents[i].ed_num_bytes - rp->extents[i].off));
+
+                ccj = (comp_calc_job*)ExAllocatePoolWithTag(pool_type, sizeof(comp_calc_job), ALLOC_TAG);
+                if (!ccj) {
+                    ERR("out of memory\n");
+
+                    if (decomp)
+                        ExFreePool(decomp);
+
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    goto exit;
+                }
+
+                Status = add_calc_job_decomp(fcb->Vcb, rp->compression, buf2, inlen, decomp ? decomp : rp->data, outlen,
+                                             inpageoff, &ccj->cj);
+                if (!NT_SUCCESS(Status)) {
+                    ERR("add_calc_job_decomp returned %08x\n", Status);
+
+                    if (decomp)
+                        ExFreePool(decomp);
+
+                    ExFreePool(ccj);
+
+                    goto exit;
+                }
+
+                ccj->data = rp->data;
+                ccj->decomp = decomp;
+
+                ccj->offset = off2;
+                ccj->length = (size_t)min(rp->read, rp->extents[i].ed_num_bytes - rp->extents[i].off);
+
+                InsertTailList(&calc_jobs, &ccj->list_entry);
+
+                buf += rp->extents[i].ed_size;
+                rp->data = (uint8_t*)rp->data + rp->extents[i].ed_num_bytes - rp->extents[i].off;
+                rp->read -= (uint32_t)(rp->extents[i].ed_num_bytes - rp->extents[i].off);
+            }
+        }
+
+        le = le->Flink;
+    }
+
     if (length > 0 && start + bytes_read < fcb->inode_item.st_size) {
         uint32_t read = (uint32_t)min(fcb->inode_item.st_size - start - bytes_read, length);
 
@@ -3095,10 +3284,54 @@ nextitem:
     }
 
     Status = STATUS_SUCCESS;
+
+    while (!IsListEmpty(&calc_jobs)) {
+        comp_calc_job* ccj = CONTAINING_RECORD(RemoveTailList(&calc_jobs), comp_calc_job, list_entry);
+
+        calc_thread_main(fcb->Vcb, ccj->cj);
+
+        KeWaitForSingleObject(&ccj->cj->event, Executive, KernelMode, false, NULL);
+
+        if (!NT_SUCCESS(ccj->cj->Status))
+            Status = ccj->cj->Status;
+
+        if (ccj->decomp) {
+            RtlCopyMemory(ccj->data, (uint8_t*)ccj->decomp + ccj->offset, ccj->length);
+            ExFreePool(ccj->decomp);
+        }
+
+        ExFreePool(ccj);
+    }
+
     if (pbr)
         *pbr = bytes_read;
 
 exit:
+    while (!IsListEmpty(&read_parts)) {
+        read_part* rp = CONTAINING_RECORD(RemoveHeadList(&read_parts), read_part, list_entry);
+
+        if (rp->buf_free)
+            ExFreePool(rp->buf);
+
+        if (rp->csum_free)
+            ExFreePool(rp->csum);
+
+        ExFreePool(rp);
+    }
+
+    while (!IsListEmpty(&calc_jobs)) {
+        comp_calc_job* ccj = CONTAINING_RECORD(RemoveHeadList(&calc_jobs), comp_calc_job, list_entry);
+
+        KeWaitForSingleObject(&ccj->cj->event, Executive, KernelMode, false, NULL);
+
+        if (ccj->decomp)
+            ExFreePool(ccj->decomp);
+
+        ExFreePool(ccj->cj);
+
+        ExFreePool(ccj);
+    }
+
     return Status;
 }
 
@@ -3221,10 +3454,17 @@ NTSTATUS do_read(PIRP Irp, bool wait, ULONG* bytes_read) {
             return STATUS_PENDING;
         }
 
-        if (fcb->ads)
+        if (fcb->ads) {
             Status = read_stream(fcb, data, start, length, bytes_read);
-        else
+
+            if (!NT_SUCCESS(Status))
+                ERR("read_stream returned %08x\n", Status);
+        } else {
             Status = read_file(fcb, data, start, length, bytes_read, Irp);
+
+            if (!NT_SUCCESS(Status))
+                ERR("read_file returned %08x\n", Status);
+        }
 
         *bytes_read += addon;
         TRACE("read %u bytes\n", *bytes_read);

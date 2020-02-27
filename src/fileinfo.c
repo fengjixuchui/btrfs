@@ -16,6 +16,7 @@
  * along with WinBtrfs.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "btrfs_drv.h"
+#include "crc32c.h"
 
 // not currently in mingw - introduced with Windows 10
 #ifndef _MSC_VER
@@ -137,8 +138,6 @@ typedef struct _FILE_LINKS_FULL_ID_INFORMATION {
 #define FILE_LINK_IGNORE_READONLY_ATTRIBUTE               0x040
 #define FILE_LINK_FORCE_RESIZE_TARGET_SR                  0x080
 #define FILE_LINK_FORCE_RESIZE_SOURCE_SR                  0x100
-
-#define FILE_CS_FLAG_CASE_SENSITIVE_DIR                 1
 
 #else
 

@@ -246,6 +246,7 @@
       <DataExecutionPrevention />
       <TargetMachine>MachineX86</TargetMachine>
       <TreatLinkerWarningAsErrors>false</TreatLinkerWarningAsErrors>
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>
@@ -293,8 +294,7 @@
       </IgnoreSpecificDefaultLibraries>
       <StackReserveSize />
       <StackCommitSize />
-      <ImageHasSafeExceptionHandlers>
-      </ImageHasSafeExceptionHandlers>
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>
@@ -342,6 +342,7 @@
       <StackReserveSize />
       <StackCommitSize />
       <IgnoreSpecificDefaultLibraries />
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
     <Inf>
       <SpecifyArchitecture>true</SpecifyArchitecture>
@@ -386,6 +387,7 @@
       <DataExecutionPrevention />
       <TargetMachine>MachineX64</TargetMachine>
       <TreatLinkerWarningAsErrors>false</TreatLinkerWarningAsErrors>
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
     <PostBuildEvent>
       <Command>
@@ -424,6 +426,7 @@
       <DataExecutionPrevention />
       <TargetMachine>MachineX86</TargetMachine>
       <TreatLinkerWarningAsErrors>false</TreatLinkerWarningAsErrors>
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
     <MASM>
       <UseSafeExceptionHandlers>true</UseSafeExceptionHandlers>
@@ -465,6 +468,7 @@
       </IgnoreSpecificDefaultLibraries>
       <StackReserveSize />
       <StackCommitSize />
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
     <ProjectReference />
     <MASM>
@@ -504,6 +508,7 @@
       <StackReserveSize />
       <StackCommitSize />
       <IgnoreSpecificDefaultLibraries />
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
     <MASM>
       <UseSafeExceptionHandlers>true</UseSafeExceptionHandlers>
@@ -541,6 +546,7 @@
       <DataExecutionPrevention />
       <TargetMachine>MachineX64</TargetMachine>
       <TreatLinkerWarningAsErrors>false</TreatLinkerWarningAsErrors>
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
     <PostBuildEvent>
       <Command>
@@ -551,8 +557,10 @@
     </MASM>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="src\blake2-impl.h" />
     <ClInclude Include="src\btrfs.h" />
     <ClInclude Include="src\btrfs_drv.h" />
+    <ClInclude Include="src\crc32c.h" />
     <ClInclude Include="src\resource.h" />
     <ClInclude Include="src\xxhash.h" />
     <ClInclude Include="src\zlib\deflate.h" />
@@ -587,6 +595,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\balance.c" />
+    <ClCompile Include="src\blake2b-ref.c" />
     <ClCompile Include="src\boot.c" />
     <ClCompile Include="src\btrfs.c" />
     <ClCompile Include="src\cache.c" />
@@ -612,6 +621,7 @@
     <ClCompile Include="src\search.c" />
     <ClCompile Include="src\security.c" />
     <ClCompile Include="src\send.c" />
+    <ClCompile Include="src\sha256.c" />
     <ClCompile Include="src\treefuncs.c" />
     <ClCompile Include="src\volume.c" />
     <ClCompile Include="src\worker-thread.c" />

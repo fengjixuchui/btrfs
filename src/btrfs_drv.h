@@ -142,6 +142,8 @@
 typedef struct _FILE_ID_128 {
     UCHAR Identifier[16];
 } FILE_ID_128, *PFILE_ID_128;
+
+#define FILE_CS_FLAG_CASE_SENSITIVE_DIR                 1
 #endif
 
 typedef struct _DUPLICATE_EXTENTS_DATA {
@@ -192,7 +194,7 @@ _Create_lock_level_(tree_lock)
 _Create_lock_level_(fcb_lock)
 _Lock_level_order_(tree_lock, fcb_lock)
 
-#define MAX_HASH_SIZE 8
+#define MAX_HASH_SIZE 32
 
 struct _device_extension;
 
@@ -604,12 +606,28 @@ typedef struct {
     LIST_ENTRY list_entry;
 } sys_chunk;
 
+enum calc_thread_type {
+    calc_thread_crc32c,
+    calc_thread_xxhash,
+    calc_thread_sha256,
+    calc_thread_blake2,
+    calc_thread_decomp_zlib,
+    calc_thread_decomp_lzo,
+    calc_thread_decomp_zstd,
+    calc_thread_comp_zlib,
+    calc_thread_comp_lzo,
+    calc_thread_comp_zstd,
+};
+
 typedef struct {
-    uint8_t* data;
-    void* csum;
+    LIST_ENTRY list_entry;
+    void* in;
+    void* out;
+    unsigned int inlen, outlen, off, space_left;
     LONG left, not_started;
     KEVENT event;
-    LIST_ENTRY list_entry;
+    enum calc_thread_type type;
+    NTSTATUS Status;
 } calc_job;
 
 typedef struct {
@@ -1194,13 +1212,13 @@ void _free_fcb(_Inout_ fcb* fcb, _In_ const char* func);
 // in fastio.c
 void init_fast_io_dispatch(FAST_IO_DISPATCH** fiod);
 
-// in crc32c.c
-#if defined(_X86_) || defined(_AMD64_)
-uint32_t __stdcall calc_crc32c_hw(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen);
-#endif
-uint32_t __stdcall calc_crc32c_sw(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen);
-typedef uint32_t (__stdcall *crc_func)(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ ULONG msglen);
-extern crc_func calc_crc32c;
+// in sha256.c
+void calc_sha256(uint8_t* hash, const void* input, size_t len);
+#define SHA256_HASH_SIZE 32
+
+// in blake2b-ref.c
+void blake2b(void *out, size_t outlen, const void* in, size_t inlen);
+#define BLAKE2_HASH_SIZE 32
 
 typedef struct {
     LIST_ENTRY* list;
@@ -1309,7 +1327,6 @@ bool insert_extent_chunk(_In_ device_extension* Vcb, _In_ fcb* fcb, _In_ chunk* 
                          _In_opt_ PIRP Irp, _In_ LIST_ENTRY* rollback, _In_ uint8_t compression, _In_ uint64_t decoded_size, _In_ bool file_write, _In_ uint64_t irp_offset);
 
 NTSTATUS do_write_file(fcb* fcb, uint64_t start_data, uint64_t end_data, void* data, PIRP Irp, bool file_write, uint32_t irp_offset, LIST_ENTRY* rollback);
-NTSTATUS write_compressed(fcb* fcb, uint64_t start_data, uint64_t end_data, void* data, PIRP Irp, LIST_ENTRY* rollback);
 bool find_data_address_in_chunk(device_extension* Vcb, chunk* c, uint64_t length, uint64_t* address);
 void get_raid56_lock_range(chunk* c, uint64_t address, uint64_t length, uint64_t* lockaddr, uint64_t* locklen);
 void add_insert_extent_rollback(LIST_ENTRY* rollback, fcb* fcb, extent* ext);
@@ -1502,7 +1519,10 @@ void watch_registry(HANDLE regh);
 NTSTATUS zlib_decompress(uint8_t* inbuf, uint32_t inlen, uint8_t* outbuf, uint32_t outlen);
 NTSTATUS lzo_decompress(uint8_t* inbuf, uint32_t inlen, uint8_t* outbuf, uint32_t outlen, uint32_t inpageoff);
 NTSTATUS zstd_decompress(uint8_t* inbuf, uint32_t inlen, uint8_t* outbuf, uint32_t outlen);
-NTSTATUS write_compressed_bit(fcb* fcb, uint64_t start_data, uint64_t end_data, void* data, bool* compressed, PIRP Irp, LIST_ENTRY* rollback);
+NTSTATUS write_compressed(fcb* fcb, uint64_t start_data, uint64_t end_data, void* data, PIRP Irp, LIST_ENTRY* rollback);
+NTSTATUS zlib_compress(uint8_t* inbuf, uint32_t inlen, uint8_t* outbuf, uint32_t outlen, unsigned int level, unsigned int* space_left);
+NTSTATUS lzo_compress(uint8_t* inbuf, uint32_t inlen, uint8_t* outbuf, uint32_t outlen, unsigned int* space_left);
+NTSTATUS zstd_compress(uint8_t* inbuf, uint32_t inlen, uint8_t* outbuf, uint32_t outlen, uint32_t level, unsigned int* space_left);
 
 // in galois.c
 void galois_double(uint8_t* data, uint32_t len);
@@ -1523,6 +1543,11 @@ _Function_class_(KSTART_ROUTINE)
 void __stdcall calc_thread(void* context);
 
 void do_calc_job(device_extension* Vcb, uint8_t* data, uint32_t sectors, void* csum);
+NTSTATUS add_calc_job_decomp(device_extension* Vcb, uint8_t compression, void* in, unsigned int inlen,
+                             void* out, unsigned int outlen, unsigned int off, calc_job** pcj);
+NTSTATUS add_calc_job_comp(device_extension* Vcb, uint8_t compression, void* in, unsigned int inlen,
+                           void* out, unsigned int outlen, calc_job** pcj);
+void calc_thread_main(device_extension* Vcb, calc_job* cj);
 
 // in balance.c
 NTSTATUS start_balance(device_extension* Vcb, void* data, ULONG length, KPROCESSOR_MODE processor_mode);

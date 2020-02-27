@@ -120,6 +120,12 @@
     <ClInclude Include="src\xxhash.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\blake2-impl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\crc32c.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="src\btrfs.rc">
@@ -286,11 +292,19 @@
     <ClCompile Include="src\xxhash.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\sha256.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\blake2b-ref.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <MASM Include="src\crc32c-amd64-masm.S">
       <Filter>Source Files</Filter>
     </MASM>
-    <MASM Include="src\crc32c-x86-masm.S" />
+    <MASM Include="src\crc32c-x86-masm.S">
+      <Filter>Source Files</Filter>
+    </MASM>
   </ItemGroup>
 </Project>
