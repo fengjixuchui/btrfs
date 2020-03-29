@@ -103,12 +103,16 @@
 
 #define READ_AHEAD_GRANULARITY COMPRESSED_EXTENT_SIZE // really ought to be a multiple of COMPRESSED_EXTENT_SIZE
 
-#define IO_REPARSE_TAG_LXSS_SYMLINK 0xa000001d // undocumented?
+#ifndef IO_REPARSE_TAG_LX_SYMLINK
 
-#define IO_REPARSE_TAG_LXSS_SOCKET      0x80000023
-#define IO_REPARSE_TAG_LXSS_FIFO        0x80000024
-#define IO_REPARSE_TAG_LXSS_CHARDEV     0x80000025
-#define IO_REPARSE_TAG_LXSS_BLOCKDEV    0x80000026
+#define IO_REPARSE_TAG_LX_SYMLINK 0xa000001d
+
+#define IO_REPARSE_TAG_AF_UNIX          0x80000023
+#define IO_REPARSE_TAG_LX_FIFO          0x80000024
+#define IO_REPARSE_TAG_LX_CHR           0x80000025
+#define IO_REPARSE_TAG_LX_BLK           0x80000026
+
+#endif
 
 #define BTRFS_VOLUME_PREFIX L"\\Device\\Btrfs{"
 
@@ -1166,6 +1170,10 @@ extern uint32_t mount_readonly;
 extern uint32_t mount_no_root_dir;
 extern uint32_t no_pnp;
 
+#ifndef __GNUC__
+#define __attribute__(x)
+#endif
+
 #ifdef _DEBUG
 
 extern bool log_started;
@@ -1180,7 +1188,7 @@ extern uint32_t debug_log_level;
 #define FIXME(s, ...) MSG(funcname, __FILE__, __LINE__, s, 1, ##__VA_ARGS__)
 #define ERR(s, ...) MSG(funcname, __FILE__, __LINE__, s, 1, ##__VA_ARGS__)
 
-void _debug_message(_In_ const char* func, _In_ const char* file, _In_ unsigned int line, _In_ char* s, ...);
+void _debug_message(_In_ const char* func, _In_ const char* file, _In_ unsigned int line, _In_ char* s, ...) __attribute__((format(printf, 4, 5)));
 
 #else
 
@@ -1191,7 +1199,7 @@ void _debug_message(_In_ const char* func, _In_ const char* file, _In_ unsigned 
 #define FIXME(s, ...) MSG(funcname, s, 1, ##__VA_ARGS__)
 #define ERR(s, ...) MSG(funcname, s, 1, ##__VA_ARGS__)
 
-void _debug_message(_In_ const char* func, _In_ char* s, ...);
+void _debug_message(_In_ const char* func, _In_ char* s, ...) __attribute__((format(printf, 2, 3)));
 
 #endif
 

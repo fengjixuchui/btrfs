@@ -28,6 +28,7 @@
 #define FileStatLxInformation (enum _FILE_INFORMATION_CLASS)70
 #define FileCaseSensitiveInformation (enum _FILE_INFORMATION_CLASS)71
 #define FileLinkInformationEx (enum _FILE_INFORMATION_CLASS)72
+#define FileStorageReserveIdInformation (enum _FILE_INFORMATION_CLASS)74
 
 typedef struct _FILE_ID_INFORMATION {
     ULONGLONG VolumeSerialNumber;
@@ -169,7 +170,7 @@ static NTSTATUS set_basic_information(device_extension* Vcb, PIRP Irp, PFILE_OBJ
         return STATUS_INVALID_PARAMETER;
     }
 
-    TRACE("file = %p, attributes = %x\n", FileObject, fbi->FileAttributes);
+    TRACE("file = %p, attributes = %lx\n", FileObject, fbi->FileAttributes);
 
     ExAcquireResourceExclusiveLite(fcb->Header.Resource, true);
 
@@ -348,7 +349,7 @@ static NTSTATUS set_disposition_information(device_extension* Vcb, PIRP Irp, PFI
     } else
         atts = fcb->atts;
 
-    TRACE("atts = %x\n", atts);
+    TRACE("atts = %lx\n", atts);
 
     if (atts & FILE_ATTRIBUTE_READONLY) {
         TRACE("not allowing readonly file to be deleted\n");
@@ -673,7 +674,7 @@ static NTSTATUS add_children_to_move_list(device_extension* Vcb, move_entry* me,
         Status = open_fileref_child(Vcb, me->fileref, &dc->name, true, true, dc->index == 0 ? true : false, PagedPool, &fr, Irp);
 
         if (!NT_SUCCESS(Status)) {
-            ERR("open_fileref_child returned %08x\n", Status);
+            ERR("open_fileref_child returned %08lx\n", Status);
             ExReleaseResourceLite(&me->fileref->fcb->nonpaged->dir_children_lock);
             return Status;
         }
@@ -777,7 +778,7 @@ static NTSTATUS create_directory_fcb(device_extension* Vcb, root* r, fcb* parfcb
 
     if (!NT_SUCCESS(Status)) {
         reap_fcb(fcb);
-        ERR("SeAssignSecurity returned %08x\n", Status);
+        ERR("SeAssignSecurity returned %08lx\n", Status);
         return Status;
     }
 
@@ -789,7 +790,7 @@ static NTSTATUS create_directory_fcb(device_extension* Vcb, root* r, fcb* parfcb
 
     Status = RtlGetOwnerSecurityDescriptor(fcb->sd, &owner, &defaulted);
     if (!NT_SUCCESS(Status)) {
-        ERR("RtlGetOwnerSecurityDescriptor returned %08x\n", Status);
+        ERR("RtlGetOwnerSecurityDescriptor returned %08lx\n", Status);
         fcb->inode_item.st_uid = UID_NOBODY;
         fcb->sd_dirty = true;
     } else {
@@ -888,7 +889,7 @@ static NTSTATUS move_across_subvols(file_ref* fileref, ccb* ccb, file_ref* destd
             Status = add_children_to_move_list(fileref->fcb->Vcb, me, Irp);
 
             if (!NT_SUCCESS(Status)) {
-                ERR("add_children_to_move_list returned %08x\n", Status);
+                ERR("add_children_to_move_list returned %08lx\n", Status);
                 goto end;
             }
         }
@@ -916,7 +917,7 @@ static NTSTATUS move_across_subvols(file_ref* fileref, ccb* ccb, file_ref* destd
 
                 Status = duplicate_fcb(me->fileref->fcb, &me->dummyfcb);
                 if (!NT_SUCCESS(Status)) {
-                    ERR("duplicate_fcb returned %08x\n", Status);
+                    ERR("duplicate_fcb returned %08lx\n", Status);
                     ExReleaseResourceLite(me->fileref->fcb->Header.Resource);
                     goto end;
                 }
@@ -990,7 +991,7 @@ static NTSTATUS move_across_subvols(file_ref* fileref, ccb* ccb, file_ref* destd
                                                                        ext->offset - ed2->offset, 1, me->fileref->fcb->inode_item.flags & BTRFS_INODE_NODATASUM, false, Irp);
 
                                     if (!NT_SUCCESS(Status)) {
-                                        ERR("update_changed_extent_ref returned %08x\n", Status);
+                                        ERR("update_changed_extent_ref returned %08lx\n", Status);
                                         ExReleaseResourceLite(me->fileref->fcb->Header.Resource);
                                         goto end;
                                     }
@@ -1095,7 +1096,7 @@ static NTSTATUS move_across_subvols(file_ref* fileref, ccb* ccb, file_ref* destd
 
             Status = create_directory_fcb(me->fileref->fcb->Vcb, r, me->fileref->parent->fcb, &me->fileref->fcb);
             if (!NT_SUCCESS(Status)) {
-                ERR("create_directory_fcb returnd %08x\n", Status);
+                ERR("create_directory_fcb returned %08lx\n", Status);
                 goto end;
             }
 
@@ -1194,7 +1195,7 @@ static NTSTATUS move_across_subvols(file_ref* fileref, ccb* ccb, file_ref* destd
 
                     Status = RtlUpcaseUnicodeString(&fileref->dc->name_uc, &fileref->dc->name, true);
                     if (!NT_SUCCESS(Status)) {
-                        ERR("RtlUpcaseUnicodeString returned %08x\n", Status);
+                        ERR("RtlUpcaseUnicodeString returned %08lx\n", Status);
                         goto end;
                     }
 
@@ -1275,7 +1276,7 @@ static NTSTATUS move_across_subvols(file_ref* fileref, ccb* ccb, file_ref* destd
         if (!me->dummyfileref->fcb->ads) {
             Status = delete_fileref(me->dummyfileref, NULL, false, Irp, rollback);
             if (!NT_SUCCESS(Status)) {
-                ERR("delete_fileref returned %08x\n", Status);
+                ERR("delete_fileref returned %08lx\n", Status);
                 goto end;
             }
         }
@@ -1331,7 +1332,7 @@ static NTSTATUS move_across_subvols(file_ref* fileref, ccb* ccb, file_ref* destd
         if (me->dummyfileref->fcb->ads && me->parent->dummyfileref->fcb->deleted) {
             Status = delete_fileref(me->dummyfileref, NULL, false, Irp, rollback);
             if (!NT_SUCCESS(Status)) {
-                ERR("delete_fileref returned %08x\n", Status);
+                ERR("delete_fileref returned %08lx\n", Status);
                 goto end;
             }
         }
@@ -1671,7 +1672,7 @@ static NTSTATUS rename_stream_to_file(device_extension* Vcb, file_ref* fileref, 
 
             Status = add_extent_to_fcb(fileref->fcb, 0, ed, (uint16_t)(offsetof(EXTENT_DATA, data[0]) + adsdata.Length), false, NULL, rollback);
             if (!NT_SUCCESS(Status)) {
-                ERR("add_extent_to_fcb returned %08x\n", Status);
+                ERR("add_extent_to_fcb returned %08lx\n", Status);
                 ExFreePool(ed);
                 reap_fcb(dummyfcb);
                 return Status;
@@ -1699,7 +1700,7 @@ static NTSTATUS rename_stream_to_file(device_extension* Vcb, file_ref* fileref, 
         if (!make_inline) {
             Status = do_write_file(fileref->fcb, 0, adsdata.Length, adsdata.Buffer, Irp, false, 0, rollback);
             if (!NT_SUCCESS(Status)) {
-                ERR("do_write_file returned %08x\n", Status);
+                ERR("do_write_file returned %08lx\n", Status);
                 ExFreePool(adsdata.Buffer);
                 reap_fcb(dummyfcb);
                 return Status;
@@ -1799,7 +1800,7 @@ static NTSTATUS rename_stream(device_extension* Vcb, file_ref* fileref, ccb* ccb
         return rename_stream_to_file(Vcb, fileref, ccb, flags, Irp, rollback);
 
     if (!is_file_name_valid(&fn, false, true)) {
-        WARN("invalid stream name %.*S\n", fn.Length / sizeof(WCHAR), fn.Buffer);
+        WARN("invalid stream name %.*S\n", (int)(fn.Length / sizeof(WCHAR)), fn.Buffer);
         return STATUS_OBJECT_NAME_INVALID;
     }
 
@@ -1836,12 +1837,12 @@ static NTSTATUS rename_stream(device_extension* Vcb, file_ref* fileref, ccb* ccb
 
                 Status = delete_fileref(sf, NULL, false, Irp, rollback);
                 if (!NT_SUCCESS(Status)) {
-                    ERR("delete_fileref returned %08x\n", Status);
+                    ERR("delete_fileref returned %08lx\n", Status);
                     goto end;
                 }
             }
         } else {
-            ERR("open_fileref_child returned %08x\n", Status);
+            ERR("open_fileref_child returned %08lx\n", Status);
             goto end;
         }
     }
@@ -1925,7 +1926,7 @@ static NTSTATUS rename_stream(device_extension* Vcb, file_ref* fileref, ccb* ccb
 
     Status = RtlUpcaseUnicodeString(&utf16uc, &fn, true);
     if (!NT_SUCCESS(Status)) {
-        ERR("RtlUpcaseUnicodeString returned %08x\n");
+        ERR("RtlUpcaseUnicodeString returned %08lx\n", Status);
         ExFreePool(utf8.Buffer);
         ExFreePool(utf16.Buffer);
         ExFreePool(adsxattr.Buffer);
@@ -2038,7 +2039,7 @@ static NTSTATUS rename_file_to_stream(device_extension* Vcb, file_ref* fileref, 
     }
 
     if (!is_file_name_valid(&fn, false, true)) {
-        WARN("invalid stream name %.*S\n", fn.Length / sizeof(WCHAR), fn.Buffer);
+        WARN("invalid stream name %.*S\n", (int)(fn.Length / sizeof(WCHAR)), fn.Buffer);
         return STATUS_OBJECT_NAME_INVALID;
     }
 
@@ -2075,12 +2076,12 @@ static NTSTATUS rename_file_to_stream(device_extension* Vcb, file_ref* fileref, 
 
                 Status = delete_fileref(sf, NULL, false, Irp, rollback);
                 if (!NT_SUCCESS(Status)) {
-                    ERR("delete_fileref returned %08x\n", Status);
+                    ERR("delete_fileref returned %08lx\n", Status);
                     goto end;
                 }
             }
         } else {
-            ERR("open_fileref_child returned %08x\n", Status);
+            ERR("open_fileref_child returned %08lx\n", Status);
             goto end;
         }
     }
@@ -2164,7 +2165,7 @@ static NTSTATUS rename_file_to_stream(device_extension* Vcb, file_ref* fileref, 
 
     Status = RtlUpcaseUnicodeString(&utf16uc, &fn, true);
     if (!NT_SUCCESS(Status)) {
-        ERR("RtlUpcaseUnicodeString returned %08x\n");
+        ERR("RtlUpcaseUnicodeString returned %08lx\n", Status);
         ExFreePool(utf8.Buffer);
         ExFreePool(utf16.Buffer);
         ExFreePool(adsxattr.Buffer);
@@ -2233,7 +2234,7 @@ static NTSTATUS rename_file_to_stream(device_extension* Vcb, file_ref* fileref, 
 
     Status = duplicate_fcb(fileref->fcb, &dummyfcb);
     if (!NT_SUCCESS(Status)) {
-        ERR("duplicate_fcb returned %08x\n", Status);
+        ERR("duplicate_fcb returned %08lx\n", Status);
         ExFreePool(utf8.Buffer);
         ExFreePool(utf16.Buffer);
         ExFreePool(utf16uc.Buffer);
@@ -2277,7 +2278,7 @@ static NTSTATUS rename_file_to_stream(device_extension* Vcb, file_ref* fileref, 
         Status = excise_extents(Vcb, dummyfcb, 0, sector_align(fileref->fcb->inode_item.st_size, Vcb->superblock.sector_size),
                                 Irp, rollback);
         if (!NT_SUCCESS(Status)) {
-            ERR("excise_extents returned %08x\n", Status);
+            ERR("excise_extents returned %08lx\n", Status);
             ExFreePool(utf8.Buffer);
             ExFreePool(utf16.Buffer);
             ExFreePool(utf16uc.Buffer);
@@ -2436,9 +2437,9 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
         flags = fri->ReplaceIfExists ? FILE_RENAME_REPLACE_IF_EXISTS : 0;
 
     TRACE("tfo = %p\n", tfo);
-    TRACE("Flags = %x\n", flags);
+    TRACE("Flags = %lx\n", flags);
     TRACE("RootDirectory = %p\n", fri->RootDirectory);
-    TRACE("FileName = %.*S\n", fri->FileNameLength / sizeof(WCHAR), fri->FileName);
+    TRACE("FileName = %.*S\n", (int)(fri->FileNameLength / sizeof(WCHAR)), fri->FileName);
 
     fn = fri->FileName;
     fnlen = fri->FileNameLength / sizeof(WCHAR);
@@ -2482,7 +2483,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
 
             CcFlushCache(FileObject->SectionObjectPointer, NULL, 0, &iosb);
             if (!NT_SUCCESS(iosb.Status)) {
-                ERR("CcFlushCache returned %08x\n", iosb.Status);
+                ERR("CcFlushCache returned %08lx\n", iosb.Status);
                 Status = iosb.Status;
                 goto end;
             }
@@ -2496,7 +2497,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
 
             CcFlushCache(FileObject->SectionObjectPointer, NULL, 0, &iosb);
             if (!NT_SUCCESS(iosb.Status)) {
-                ERR("CcFlushCache returned %08x\n", iosb.Status);
+                ERR("CcFlushCache returned %08lx\n", iosb.Status);
                 Status = iosb.Status;
                 goto end;
             }
@@ -2509,7 +2510,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
     fnus.Buffer = fn;
     fnus.Length = fnus.MaximumLength = (uint16_t)(fnlen * sizeof(WCHAR));
 
-    TRACE("fnus = %.*S\n", fnus.Length / sizeof(WCHAR), fnus.Buffer);
+    TRACE("fnus = %.*S\n", (int)(fnus.Length / sizeof(WCHAR)), fnus.Buffer);
 
     for (unsigned int i = 0 ; i < fnus.Length / sizeof(WCHAR); i++) {
         if (fnus.Buffer[i] == ':') {
@@ -2584,7 +2585,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
         Status = open_fileref(Vcb, &related, &fnus, NULL, true, NULL, NULL, PagedPool, ccb->case_sensitive, Irp);
 
         if (!NT_SUCCESS(Status)) {
-            ERR("open_fileref returned %08x\n", Status);
+            ERR("open_fileref returned %08lx\n", Status);
             goto end;
         }
     }
@@ -2599,7 +2600,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
     if (!SeAccessCheck(related->fcb->sd, &subjcont, false, fcb->type == BTRFS_TYPE_DIRECTORY ? FILE_ADD_SUBDIRECTORY : FILE_ADD_FILE, 0, NULL,
         IoGetFileObjectGenericMapping(), Irp->RequestorMode, &access, &Status)) {
         SeReleaseSubjectContext(&subjcont);
-        TRACE("SeAccessCheck failed, returning %08x\n", Status);
+        TRACE("SeAccessCheck failed, returning %08lx\n", Status);
         goto end;
     }
 
@@ -2617,7 +2618,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
         if (!SeAccessCheck(oldfileref->fcb->sd, &subjcont, false, DELETE, 0, NULL,
                            IoGetFileObjectGenericMapping(), Irp->RequestorMode, &access, &Status)) {
             SeReleaseSubjectContext(&subjcont);
-            TRACE("SeAccessCheck failed, returning %08x\n", Status);
+            TRACE("SeAccessCheck failed, returning %08lx\n", Status);
             goto end;
         }
 
@@ -2630,7 +2631,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
 
         Status = delete_fileref(oldfileref, NULL, oldfileref->open_count > 0 && flags & FILE_RENAME_POSIX_SEMANTICS, Irp, &rollback);
         if (!NT_SUCCESS(Status)) {
-            ERR("delete_fileref returned %08x\n", Status);
+            ERR("delete_fileref returned %08lx\n", Status);
             goto end;
         }
     }
@@ -2638,7 +2639,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
     if (fileref->parent->fcb->subvol != related->fcb->subvol && (fileref->fcb->subvol == fileref->parent->fcb->subvol || fileref->fcb == Vcb->dummy_fcb)) {
         Status = move_across_subvols(fileref, ccb, related, &utf8, &fnus, Irp, &rollback);
         if (!NT_SUCCESS(Status)) {
-            ERR("move_across_subvols returned %08x\n", Status);
+            ERR("move_across_subvols returned %08lx\n", Status);
         }
         goto end;
     }
@@ -2652,7 +2653,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
 
         Status = fileref_get_filename(fileref, &oldfn, &name_offset, &reqlen);
         if (Status != STATUS_BUFFER_OVERFLOW) {
-            ERR("fileref_get_filename returned %08x\n", Status);
+            ERR("fileref_get_filename returned %08lx\n", Status);
             goto end;
         }
 
@@ -2667,7 +2668,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
 
         Status = fileref_get_filename(fileref, &oldfn, &name_offset, &reqlen);
         if (!NT_SUCCESS(Status)) {
-            ERR("fileref_get_filename returned %08x\n", Status);
+            ERR("fileref_get_filename returned %08lx\n", Status);
             ExFreePool(oldfn.Buffer);
             goto end;
         }
@@ -2686,7 +2687,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
             RtlCopyMemory(fileref->oldutf8.Buffer, fileref->dc->utf8.Buffer, fileref->dc->utf8.Length);
         }
 
-        TRACE("renaming %.*S to %.*S\n", fileref->dc->name.Length / sizeof(WCHAR), fileref->dc->name.Buffer, fnus.Length / sizeof(WCHAR), fnus.Buffer);
+        TRACE("renaming %.*S to %.*S\n", (int)(fileref->dc->name.Length / sizeof(WCHAR)), fileref->dc->name.Buffer, (int)(fnus.Length / sizeof(WCHAR)), fnus.Buffer);
 
         mark_fileref_dirty(fileref);
 
@@ -2723,7 +2724,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
 
             Status = RtlUpcaseUnicodeString(&fileref->dc->name_uc, &fileref->dc->name, true);
             if (!NT_SUCCESS(Status)) {
-                ERR("RtlUpcaseUnicodeString returned %08x\n", Status);
+                ERR("RtlUpcaseUnicodeString returned %08lx\n", Status);
                 ExReleaseResourceLite(&fileref->parent->fcb->nonpaged->dir_children_lock);
                 ExFreePool(oldfn.Buffer);
                 goto end;
@@ -2743,7 +2744,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
 
         Status = fileref_get_filename(fileref, &newfn, &name_offset, &reqlen);
         if (Status != STATUS_BUFFER_OVERFLOW) {
-            ERR("fileref_get_filename returned %08x\n", Status);
+            ERR("fileref_get_filename returned %08lx\n", Status);
             ExFreePool(oldfn.Buffer);
             goto end;
         }
@@ -2760,7 +2761,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
 
         Status = fileref_get_filename(fileref, &newfn, &name_offset, &reqlen);
         if (!NT_SUCCESS(Status)) {
-            ERR("fileref_get_filename returned %08x\n", Status);
+            ERR("fileref_get_filename returned %08lx\n", Status);
             ExFreePool(oldfn.Buffer);
             ExFreePool(newfn.Buffer);
             goto end;
@@ -2893,7 +2894,7 @@ static NTSTATUS set_rename_information(device_extension* Vcb, PIRP Irp, PFILE_OB
 
             Status = RtlUpcaseUnicodeString(&fileref->dc->name_uc, &fileref->dc->name, true);
             if (!NT_SUCCESS(Status)) {
-                ERR("RtlUpcaseUnicodeString returned %08x\n", Status);
+                ERR("RtlUpcaseUnicodeString returned %08lx\n", Status);
                 goto end;
             }
 
@@ -3060,7 +3061,7 @@ NTSTATUS stream_set_end_of_file_information(device_extension* Vcb, uint16_t end,
     LARGE_INTEGER time;
     BTRFS_TIME now;
 
-    TRACE("setting new end to %I64x bytes (currently %x)\n", end, fcb->adsdata.Length);
+    TRACE("setting new end to %x bytes (currently %x)\n", end, fcb->adsdata.Length);
 
     if (!fileref || !fileref->parent) {
         ERR("no fileref for stream\n");
@@ -3071,14 +3072,14 @@ NTSTATUS stream_set_end_of_file_information(device_extension* Vcb, uint16_t end,
         if (advance_only)
             return STATUS_SUCCESS;
 
-        TRACE("truncating stream to %I64x bytes\n", end);
+        TRACE("truncating stream to %x bytes\n", end);
 
         fcb->adsdata.Length = end;
     } else if (end > fcb->adsdata.Length) {
-        TRACE("extending stream to %I64x bytes\n", end);
+        TRACE("extending stream to %x bytes\n", end);
 
         if (end > fcb->adsmaxlen) {
-            ERR("error - xattr too long (%u > %u)\n", end, fcb->adsmaxlen);
+            ERR("error - xattr too long (%u > %lu)\n", end, fcb->adsmaxlen);
             return STATUS_DISK_FULL;
         }
 
@@ -3269,7 +3270,7 @@ end:
         }
 
         if (!NT_SUCCESS(Status))
-            ERR("CcSetFileSizes threw exception %08x\n", Status);
+            ERR("CcSetFileSizes threw exception %08lx\n", Status);
     }
 
     ExReleaseResourceLite(&Vcb->tree_lock);
@@ -3318,10 +3319,10 @@ static NTSTATUS set_link_information(device_extension* Vcb, PIRP Irp, PFILE_OBJE
     else
         flags = fli->ReplaceIfExists ? FILE_LINK_REPLACE_IF_EXISTS : 0;
 
-    TRACE("flags = %x\n", flags);
+    TRACE("flags = %lx\n", flags);
     TRACE("RootDirectory = %p\n", fli->RootDirectory);
-    TRACE("FileNameLength = %x\n", fli->FileNameLength);
-    TRACE("FileName = %.*S\n", fli->FileNameLength / sizeof(WCHAR), fli->FileName);
+    TRACE("FileNameLength = %lx\n", fli->FileNameLength);
+    TRACE("FileName = %.*S\n", (int)(fli->FileNameLength / sizeof(WCHAR)), fli->FileName);
 
     fn = fli->FileName;
     fnlen = fli->FileNameLength / sizeof(WCHAR);
@@ -3379,7 +3380,7 @@ static NTSTATUS set_link_information(device_extension* Vcb, PIRP Irp, PFILE_OBJE
     fnus.Buffer = fn;
     fnus.Length = fnus.MaximumLength = (uint16_t)(fnlen * sizeof(WCHAR));
 
-    TRACE("fnus = %.*S\n", fnus.Length / sizeof(WCHAR), fnus.Buffer);
+    TRACE("fnus = %.*S\n", (int)(fnus.Length / sizeof(WCHAR)), fnus.Buffer);
 
     Status = utf16_to_utf8(NULL, 0, &utf8len, fn, (ULONG)fnlen * sizeof(WCHAR));
     if (!NT_SUCCESS(Status))
@@ -3439,7 +3440,7 @@ static NTSTATUS set_link_information(device_extension* Vcb, PIRP Irp, PFILE_OBJE
         Status = open_fileref(Vcb, &related, &fnus, NULL, true, NULL, NULL, PagedPool, ccb->case_sensitive, Irp);
 
         if (!NT_SUCCESS(Status)) {
-            ERR("open_fileref returned %08x\n", Status);
+            ERR("open_fileref returned %08lx\n", Status);
             goto end;
         }
     }
@@ -3449,7 +3450,7 @@ static NTSTATUS set_link_information(device_extension* Vcb, PIRP Irp, PFILE_OBJE
     if (!SeAccessCheck(related->fcb->sd, &subjcont, false, FILE_ADD_FILE, 0, NULL,
                        IoGetFileObjectGenericMapping(), Irp->RequestorMode, &access, &Status)) {
         SeReleaseSubjectContext(&subjcont);
-        TRACE("SeAccessCheck failed, returning %08x\n", Status);
+        TRACE("SeAccessCheck failed, returning %08lx\n", Status);
         goto end;
     }
 
@@ -3467,7 +3468,7 @@ static NTSTATUS set_link_information(device_extension* Vcb, PIRP Irp, PFILE_OBJE
         if (!SeAccessCheck(oldfileref->fcb->sd, &subjcont, false, DELETE, 0, NULL,
                            IoGetFileObjectGenericMapping(), Irp->RequestorMode, &access, &Status)) {
             SeReleaseSubjectContext(&subjcont);
-            TRACE("SeAccessCheck failed, returning %08x\n", Status);
+            TRACE("SeAccessCheck failed, returning %08lx\n", Status);
             goto end;
         }
 
@@ -3480,7 +3481,7 @@ static NTSTATUS set_link_information(device_extension* Vcb, PIRP Irp, PFILE_OBJE
 
         Status = delete_fileref(oldfileref, NULL, oldfileref->open_count > 0 && flags & FILE_RENAME_POSIX_SEMANTICS, Irp, &rollback);
         if (!NT_SUCCESS(Status)) {
-            ERR("delete_fileref returned %08x\n", Status);
+            ERR("delete_fileref returned %08lx\n", Status);
             goto end;
         }
     }
@@ -3495,7 +3496,7 @@ static NTSTATUS set_link_information(device_extension* Vcb, PIRP Irp, PFILE_OBJE
 
     Status = add_dir_child(related->fcb, fcb->inode, false, &utf8, &fnus, fcb->type, &dc);
     if (!NT_SUCCESS(Status))
-        WARN("add_dir_child returned %08x\n", Status);
+        WARN("add_dir_child returned %08lx\n", Status);
 
     fr2->dc = dc;
     dc->fileref = fr2;
@@ -3652,7 +3653,7 @@ static NTSTATUS set_valid_data_length_information(device_extension* Vcb, PIRP Ir
     ULONG filter;
 
     if (IrpSp->Parameters.SetFile.Length < sizeof(FILE_VALID_DATA_LENGTH_INFORMATION)) {
-        ERR("input buffer length was %u, expected %u\n", IrpSp->Parameters.SetFile.Length, sizeof(FILE_VALID_DATA_LENGTH_INFORMATION));
+        ERR("input buffer length was %lu, expected %Iu\n", IrpSp->Parameters.SetFile.Length, sizeof(FILE_VALID_DATA_LENGTH_INFORMATION));
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -3723,7 +3724,7 @@ end:
         }
 
         if (!NT_SUCCESS(Status))
-            ERR("CcSetFileSizes threw exception %08x\n", Status);
+            ERR("CcSetFileSizes threw exception %08lx\n", Status);
         else
             fcb->Header.AllocationSize = ccfs.AllocationSize;
     }
@@ -3953,6 +3954,11 @@ NTSTATUS __stdcall drv_set_information(IN PDEVICE_OBJECT DeviceObject, IN PIRP I
 
             Status = set_case_sensitive_information(Irp);
             break;
+
+        case FileStorageReserveIdInformation:
+            WARN("unimplemented FileInformationClass FileStorageReserveIdInformation\n");
+            break;
+
 #ifndef _MSC_VER
 #pragma GCC diagnostic pop
 #endif
@@ -3964,7 +3970,7 @@ NTSTATUS __stdcall drv_set_information(IN PDEVICE_OBJECT DeviceObject, IN PIRP I
 end:
     Irp->IoStatus.Status = Status;
 
-    TRACE("returning %08x\n", Status);
+    TRACE("returning %08lx\n", Status);
 
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
@@ -4211,7 +4217,7 @@ static NTSTATUS fill_in_file_name_information(FILE_NAME_INFORMATION* fni, fcb* f
 
     *length -= (LONG)offsetof(FILE_NAME_INFORMATION, FileName[0]);
 
-    TRACE("maximum length is %u\n", *length);
+    TRACE("maximum length is %li\n", *length);
     fni->FileNameLength = 0;
 
     fni->FileName[0] = 0;
@@ -4222,7 +4228,7 @@ static NTSTATUS fill_in_file_name_information(FILE_NAME_INFORMATION* fni, fcb* f
 
     Status = fileref_get_filename(fileref, &fn, NULL, &reqlen);
     if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW) {
-        ERR("fileref_get_filename returned %08x\n", Status);
+        ERR("fileref_get_filename returned %08lx\n", Status);
         return Status;
     }
 
@@ -4244,11 +4250,11 @@ static NTSTATUS fill_in_file_name_information(FILE_NAME_INFORMATION* fni, fcb* f
     if (Status == STATUS_BUFFER_OVERFLOW) {
         *length = -1;
         fni->FileNameLength = reqlen;
-        TRACE("%.*S (truncated)\n", fn.Length / sizeof(WCHAR), fn.Buffer);
+        TRACE("%.*S (truncated)\n", (int)(fn.Length / sizeof(WCHAR)), fn.Buffer);
     } else {
         *length -= fn.Length;
         fni->FileNameLength = fn.Length;
-        TRACE("%.*S\n", fn.Length / sizeof(WCHAR), fn.Buffer);
+        TRACE("%.*S\n", (int)(fn.Length / sizeof(WCHAR)), fn.Buffer);
     }
 
     return Status;
@@ -4312,7 +4318,7 @@ static NTSTATUS fill_in_file_stream_information(FILE_STREAM_INFORMATION* fsi, fi
         le = le->Flink;
     }
 
-    TRACE("length = %i, reqsize = %u\n", *length, reqsize);
+    TRACE("length = %li, reqsize = %lu\n", *length, reqsize);
 
     if (reqsize > *length) {
         Status = STATUS_BUFFER_OVERFLOW;
@@ -4480,12 +4486,12 @@ static NTSTATUS fill_in_hard_link_information(FILE_LINKS_INFORMATION* fli, file_
                 hardlink* hl = CONTAINING_RECORD(le, hardlink, list_entry);
                 file_ref* parfr;
 
-                TRACE("parent %I64x, index %I64x, name %.*S\n", hl->parent, hl->index, hl->name.Length / sizeof(WCHAR), hl->name.Buffer);
+                TRACE("parent %I64x, index %I64x, name %.*S\n", hl->parent, hl->index, (int)(hl->name.Length / sizeof(WCHAR)), hl->name.Buffer);
 
                 Status = open_fileref_by_inode(fcb->Vcb, fcb->subvol, hl->parent, &parfr, Irp);
 
                 if (!NT_SUCCESS(Status)) {
-                    ERR("open_fileref_by_inode returned %08x\n", Status);
+                    ERR("open_fileref_by_inode returned %08lx\n", Status);
                 } else if (!parfr->deleted) {
                     LIST_ENTRY* le2;
                     bool found = false, deleted = false;
@@ -4512,7 +4518,7 @@ static NTSTATUS fill_in_hard_link_information(FILE_LINKS_INFORMATION* fli, file_
                         fn = &hl->name;
 
                     if (!deleted) {
-                        TRACE("fn = %.*S (found = %u)\n", fn->Length / sizeof(WCHAR), fn->Buffer, found);
+                        TRACE("fn = %.*S (found = %u)\n", (int)(fn->Length / sizeof(WCHAR)), fn->Buffer, found);
 
                         if (feli)
                             bytes_needed = (LONG)sector_align(bytes_needed, 8);
@@ -4648,12 +4654,12 @@ static NTSTATUS fill_in_hard_link_full_id_information(FILE_LINKS_FULL_ID_INFORMA
                 hardlink* hl = CONTAINING_RECORD(le, hardlink, list_entry);
                 file_ref* parfr;
 
-                TRACE("parent %I64x, index %I64x, name %.*S\n", hl->parent, hl->index, hl->name.Length / sizeof(WCHAR), hl->name.Buffer);
+                TRACE("parent %I64x, index %I64x, name %.*S\n", hl->parent, hl->index, (int)(hl->name.Length / sizeof(WCHAR)), hl->name.Buffer);
 
                 Status = open_fileref_by_inode(fcb->Vcb, fcb->subvol, hl->parent, &parfr, Irp);
 
                 if (!NT_SUCCESS(Status)) {
-                    ERR("open_fileref_by_inode returned %08x\n", Status);
+                    ERR("open_fileref_by_inode returned %08lx\n", Status);
                 } else if (!parfr->deleted) {
                     LIST_ENTRY* le2;
                     bool found = false, deleted = false;
@@ -4680,7 +4686,7 @@ static NTSTATUS fill_in_hard_link_full_id_information(FILE_LINKS_FULL_ID_INFORMA
                         fn = &hl->name;
 
                     if (!deleted) {
-                        TRACE("fn = %.*S (found = %u)\n", fn->Length / sizeof(WCHAR), fn->Buffer, found);
+                        TRACE("fn = %.*S (found = %u)\n", (int)(fn->Length / sizeof(WCHAR)), fn->Buffer, found);
 
                         if (flefii)
                             bytes_needed = (LONG)sector_align(bytes_needed, 8);
@@ -4745,8 +4751,7 @@ static NTSTATUS fill_in_file_id_information(FILE_ID_INFORMATION* fii, fcb* fcb, 
 static NTSTATUS fill_in_file_stat_information(FILE_STAT_INFORMATION* fsi, fcb* fcb, ccb* ccb, LONG* length) {
     INODE_ITEM* ii;
 
-    fsi->FileId.LowPart = (uint32_t)fcb->inode;
-    fsi->FileId.HighPart = (uint32_t)fcb->subvol->id;
+    fsi->FileId.QuadPart = make_file_id(fcb->subvol, fcb->inode);
 
     if (fcb->ads)
         ii = &ccb->fileref->parent->fcb->inode_item;
@@ -4775,13 +4780,13 @@ static NTSTATUS fill_in_file_stat_information(FILE_STAT_INFORMATION* fsi, fcb* f
     }
 
     if (fcb->type == BTRFS_TYPE_SOCKET)
-        fsi->ReparseTag = IO_REPARSE_TAG_LXSS_SOCKET;
+        fsi->ReparseTag = IO_REPARSE_TAG_AF_UNIX;
     else if (fcb->type == BTRFS_TYPE_FIFO)
-        fsi->ReparseTag = IO_REPARSE_TAG_LXSS_FIFO;
+        fsi->ReparseTag = IO_REPARSE_TAG_LX_FIFO;
     else if (fcb->type == BTRFS_TYPE_CHARDEV)
-        fsi->ReparseTag = IO_REPARSE_TAG_LXSS_CHARDEV;
+        fsi->ReparseTag = IO_REPARSE_TAG_LX_CHR;
     else if (fcb->type == BTRFS_TYPE_BLOCKDEV)
-        fsi->ReparseTag = IO_REPARSE_TAG_LXSS_BLOCKDEV;
+        fsi->ReparseTag = IO_REPARSE_TAG_LX_BLK;
     else if (!(fsi->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
         fsi->ReparseTag = 0;
     else
@@ -4805,8 +4810,7 @@ static NTSTATUS fill_in_file_stat_information(FILE_STAT_INFORMATION* fsi, fcb* f
 static NTSTATUS fill_in_file_stat_lx_information(FILE_STAT_LX_INFORMATION* fsli, fcb* fcb, ccb* ccb, LONG* length) {
     INODE_ITEM* ii;
 
-    fsli->FileId.LowPart = (uint32_t)fcb->inode;
-    fsli->FileId.HighPart = (uint32_t)fcb->subvol->id;
+    fsli->FileId.QuadPart = make_file_id(fcb->subvol, fcb->inode);
 
     if (fcb->ads)
         ii = &ccb->fileref->parent->fcb->inode_item;
@@ -4835,13 +4839,13 @@ static NTSTATUS fill_in_file_stat_lx_information(FILE_STAT_LX_INFORMATION* fsli,
     }
 
     if (fcb->type == BTRFS_TYPE_SOCKET)
-        fsli->ReparseTag = IO_REPARSE_TAG_LXSS_SOCKET;
+        fsli->ReparseTag = IO_REPARSE_TAG_AF_UNIX;
     else if (fcb->type == BTRFS_TYPE_FIFO)
-        fsli->ReparseTag = IO_REPARSE_TAG_LXSS_FIFO;
+        fsli->ReparseTag = IO_REPARSE_TAG_LX_FIFO;
     else if (fcb->type == BTRFS_TYPE_CHARDEV)
-        fsli->ReparseTag = IO_REPARSE_TAG_LXSS_CHARDEV;
+        fsli->ReparseTag = IO_REPARSE_TAG_LX_CHR;
     else if (fcb->type == BTRFS_TYPE_BLOCKDEV)
-        fsli->ReparseTag = IO_REPARSE_TAG_LXSS_BLOCKDEV;
+        fsli->ReparseTag = IO_REPARSE_TAG_LX_BLK;
     else if (!(fsli->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
         fsli->ReparseTag = 0;
     else
@@ -4882,6 +4886,19 @@ static NTSTATUS fill_in_file_case_sensitive_information(FILE_CASE_SENSITIVE_INFO
     fcsi->Flags = fcb->case_sensitive ? FILE_CS_FLAG_CASE_SENSITIVE_DIR : 0;
 
     *length -= sizeof(FILE_CASE_SENSITIVE_INFORMATION);
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS fill_in_file_compression_information(FILE_COMPRESSION_INFORMATION* fci, LONG* length, fcb* fcb) {
+    *length -= sizeof(FILE_COMPRESSION_INFORMATION);
+
+    memset(fci, 0, sizeof(FILE_COMPRESSION_INFORMATION));
+
+    if (fcb->ads)
+        fci->CompressedFileSize.QuadPart = fcb->adsdata.Length;
+    else if (!S_ISDIR(fcb->inode_item.st_mode))
+        fci->CompressedFileSize.QuadPart = fcb->inode_item.st_size;
 
     return STATUS_SUCCESS;
 }
@@ -5015,9 +5032,14 @@ static NTSTATUS query_info(device_extension* Vcb, PFILE_OBJECT FileObject, PIRP 
         }
 
         case FileCompressionInformation:
-            FIXME("STUB: FileCompressionInformation\n");
-            Status = STATUS_INVALID_PARAMETER;
-            goto exit;
+        {
+            FILE_COMPRESSION_INFORMATION* fci = Irp->AssociatedIrp.SystemBuffer;
+
+            TRACE("FileCompressionInformation\n");
+
+            Status = fill_in_file_compression_information(fci, &length, fcb);
+            break;
+        }
 
         case FileEaInformation:
         {
@@ -5250,7 +5272,7 @@ static NTSTATUS query_info(device_extension* Vcb, PFILE_OBJECT FileObject, PIRP 
     Irp->IoStatus.Information = IrpSp->Parameters.QueryFile.Length - length;
 
 exit:
-    TRACE("query_info returning %08x\n", Status);
+    TRACE("query_info returning %08lx\n", Status);
 
     return Status;
 }
@@ -5289,7 +5311,7 @@ NTSTATUS __stdcall drv_query_information(IN PDEVICE_OBJECT DeviceObject, IN PIRP
     Status = query_info(fcb->Vcb, IrpSp->FileObject, Irp);
 
 end:
-    TRACE("returning %08x\n", Status);
+    TRACE("returning %08lx\n", Status);
 
     Irp->IoStatus.Status = Status;
 
@@ -5517,7 +5539,7 @@ end2:
     ExReleaseResourceLite(fcb->Header.Resource);
 
 end:
-    TRACE("returning %08x\n", Status);
+    TRACE("returning %08lx\n", Status);
 
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW ? retlen : 0;
@@ -5580,7 +5602,7 @@ NTSTATUS __stdcall drv_set_ea(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp) {
 
     Status = IoCheckEaBufferValidity(ffei, IrpSp->Parameters.SetEa.Length, &offset);
     if (!NT_SUCCESS(Status)) {
-        ERR("IoCheckEaBufferValidity returned %08x (error at offset %u)\n", Status, offset);
+        ERR("IoCheckEaBufferValidity returned %08lx (error at offset %lu)\n", Status, offset);
         goto end;
     }
 
@@ -5876,7 +5898,7 @@ end2:
     }
 
 end:
-    TRACE("returning %08x\n", Status);
+    TRACE("returning %08lx\n", Status);
 
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = 0;

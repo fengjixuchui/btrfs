@@ -81,7 +81,7 @@ static void get_system_root(system_root* sr) {
     while (true) {
         Status = ZwOpenSymbolicLinkObject(&h, GENERIC_READ, &objatt);
         if (!NT_SUCCESS(Status)) {
-            ERR("ZwOpenSymbolicLinkObject returned %08x\n", Status);
+            ERR("ZwOpenSymbolicLinkObject returned %08lx\n", Status);
             return;
         }
 
@@ -89,7 +89,7 @@ static void get_system_root(system_root* sr) {
 
         Status = ZwQuerySymbolicLinkObject(h, &target, &retlen);
         if (Status != STATUS_BUFFER_TOO_SMALL) {
-            ERR("ZwQuerySymbolicLinkObject returned %08x\n", Status);
+            ERR("ZwQuerySymbolicLinkObject returned %08lx\n", Status);
             NtClose(h);
             return;
         }
@@ -110,7 +110,7 @@ static void get_system_root(system_root* sr) {
 
         Status = ZwQuerySymbolicLinkObject(h, &target, NULL);
         if (!NT_SUCCESS(Status)) {
-            ERR("ZwQuerySymbolicLinkObject returned %08x\n", Status);
+            ERR("ZwQuerySymbolicLinkObject returned %08lx\n", Status);
             NtClose(h);
             ExFreePool(target.Buffer);
             return;
@@ -119,9 +119,9 @@ static void get_system_root(system_root* sr) {
         NtClose(h);
 
         if (second_time) {
-            TRACE("boot device is %.*S\n", target.Length / sizeof(WCHAR), target.Buffer);
+            TRACE("boot device is %.*S\n", (int)(target.Length / sizeof(WCHAR)), target.Buffer);
         } else {
-            TRACE("system root is %.*S\n", target.Length / sizeof(WCHAR), target.Buffer);
+            TRACE("system root is %.*S\n", (int)(target.Length / sizeof(WCHAR)), target.Buffer);
         }
 
         if (!second_time && target.Length >= sizeof(boot_device) - sizeof(WCHAR) &&
@@ -244,13 +244,13 @@ static void change_symlink(uint32_t disk_num, uint32_t partition_num, BTRFS_UUID
 
     Status = RtlUnicodeStringPrintf(&us, L"\\Device\\Harddisk%u\\Partition%u", disk_num, partition_num);
     if (!NT_SUCCESS(Status)) {
-        ERR("RtlUnicodeStringPrintf returned %08x\n", Status);
+        ERR("RtlUnicodeStringPrintf returned %08lx\n", Status);
         return;
     }
 
     Status = IoDeleteSymbolicLink(&us);
     if (!NT_SUCCESS(Status))
-        ERR("IoDeleteSymbolicLink returned %08x\n", Status);
+        ERR("IoDeleteSymbolicLink returned %08lx\n", Status);
 
     RtlCopyMemory(target, BTRFS_VOLUME_PREFIX, sizeof(BTRFS_VOLUME_PREFIX) - sizeof(WCHAR));
 
@@ -273,7 +273,7 @@ static void change_symlink(uint32_t disk_num, uint32_t partition_num, BTRFS_UUID
 
     Status = IoCreateSymbolicLink(&us, &us2);
     if (!NT_SUCCESS(Status))
-        ERR("IoCreateSymbolicLink returned %08x\n", Status);
+        ERR("IoCreateSymbolicLink returned %08lx\n", Status);
 }
 
 static void mountmgr_notification(BTRFS_UUID* uuid) {
@@ -288,7 +288,7 @@ static void mountmgr_notification(BTRFS_UUID* uuid) {
     RtlInitUnicodeString(&mmdevpath, MOUNTMGR_DEVICE_NAME);
     Status = IoGetDeviceObjectPointer(&mmdevpath, FILE_READ_ATTRIBUTES, &FileObject, &mountmgr);
     if (!NT_SUCCESS(Status)) {
-        ERR("IoGetDeviceObjectPointer returned %08x\n", Status);
+        ERR("IoGetDeviceObjectPointer returned %08lx\n", Status);
         return;
     }
 
@@ -320,7 +320,7 @@ static void mountmgr_notification(BTRFS_UUID* uuid) {
 
     Status = dev_ioctl(mountmgr, IOCTL_MOUNTMGR_VOLUME_ARRIVAL_NOTIFICATION, mmtn, mmtnlen, NULL, 0, false, NULL);
     if (!NT_SUCCESS(Status)) {
-        ERR("IOCTL_MOUNTMGR_VOLUME_ARRIVAL_NOTIFICATION returned %08x\n", Status);
+        ERR("IOCTL_MOUNTMGR_VOLUME_ARRIVAL_NOTIFICATION returned %08lx\n", Status);
         ExFreePool(mmtn);
         return;
     }
@@ -352,7 +352,7 @@ static void check_boot_options() {
 
         Status = ZwOpenKey(&control, KEY_QUERY_VALUE, &oa);
         if (!NT_SUCCESS(Status)) {
-            ERR("ZwOpenKey returned %08x\n", Status);
+            ERR("ZwOpenKey returned %08lx\n", Status);
             return;
         }
 
@@ -371,7 +371,7 @@ static void check_boot_options() {
         Status = ZwQueryValueKey(control, &name, KeyValueFullInformation, kvfi,
                                  kvfilen, &kvfilen);
         if (!NT_SUCCESS(Status)) {
-            ERR("ZwQueryValueKey returned %08x\n", Status);
+            ERR("ZwQueryValueKey returned %08lx\n", Status);
             NtClose(control);
             return;
         }
@@ -449,7 +449,7 @@ void __stdcall check_system_root(PDRIVER_OBJECT DriverObject, PVOID Context, ULO
     PDEVICE_OBJECT pdo_to_add = NULL;
     volume_child* boot_vc = NULL;
 
-    TRACE("(%p, %p, %u)\n", DriverObject, Context, Count);
+    TRACE("(%p, %p, %lu)\n", DriverObject, Context, Count);
 
     // wait for any PNP notifications in progress to finish
     ExAcquireResourceExclusiveLite(&boot_lock, TRUE);
@@ -576,11 +576,11 @@ void __stdcall check_system_root(PDRIVER_OBJECT DriverObject, PVOID Context, ULO
 
             Status = IoSetDeviceInterfaceState(&name, false);
             if (!NT_SUCCESS(Status))
-                ERR("IoSetDeviceInterfaceState returned %08x\n", Status);
+                ERR("IoSetDeviceInterfaceState returned %08lx\n", Status);
 
             Status = IoSetDeviceInterfaceState(&name, true);
             if (!NT_SUCCESS(Status))
-                ERR("IoSetDeviceInterfaceState returned %08x\n", Status);
+                ERR("IoSetDeviceInterfaceState returned %08lx\n", Status);
 
             ExFreePool(name.Buffer);
         }
