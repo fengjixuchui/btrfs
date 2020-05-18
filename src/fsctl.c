@@ -2006,7 +2006,7 @@ static NTSTATUS set_zero_data(device_extension* Vcb, PFILE_OBJECT FileObject, vo
         if ((uint64_t)fzdi->BeyondFinalZero.QuadPart > fcb->inode_item.st_size)
             end = sector_align(fcb->inode_item.st_size, Vcb->superblock.sector_size);
         else
-            end = (fzdi->BeyondFinalZero.QuadPart / Vcb->superblock.sector_size) * Vcb->superblock.sector_size;
+            end = (fzdi->BeyondFinalZero.QuadPart >> Vcb->sector_shift) << Vcb->sector_shift;
 
         if (end <= start) {
             Status = zero_data(Vcb, fcb, fzdi->FileOffset.QuadPart, fzdi->BeyondFinalZero.QuadPart - fzdi->FileOffset.QuadPart, Irp, &rollback);
@@ -3383,7 +3383,7 @@ static NTSTATUS duplicate_extents(device_extension* Vcb, PFILE_OBJECT FileObject
             dataoff = 0;
             datalen2 = (ULONG)ded->ByteCount.QuadPart;
         } else {
-            dataoff = ded->TargetFileOffset.QuadPart % Vcb->superblock.sector_size;
+            dataoff = ded->TargetFileOffset.QuadPart & (Vcb->superblock.sector_size - 1);
             datalen2 = (ULONG)sector_align(ded->ByteCount.QuadPart + dataoff, Vcb->superblock.sector_size);
         }
 
@@ -3467,7 +3467,7 @@ static NTSTATUS duplicate_extents(device_extension* Vcb, PFILE_OBJECT FileObject
 
             fcb->inode_item.st_blocks += datalen2;
         } else {
-            uint64_t start = ded->TargetFileOffset.QuadPart - (ded->TargetFileOffset.QuadPart % Vcb->superblock.sector_size);
+            uint64_t start = ded->TargetFileOffset.QuadPart - (ded->TargetFileOffset.QuadPart & (Vcb->superblock.sector_size - 1));
 
             Status = do_write_file(fcb, start, start + datalen2, data2, Irp, false, 0, &rollback);
             if (!NT_SUCCESS(Status)) {
@@ -3541,7 +3541,7 @@ static NTSTATUS duplicate_extents(device_extension* Vcb, PFILE_OBJECT FileObject
 
                     if (ext->csum) {
                         if (ext->extent_data.compression == BTRFS_COMPRESSION_NONE) {
-                            ext2->csum = ExAllocatePoolWithTag(PagedPool, (ULONG)(ed2d->num_bytes * Vcb->csum_size / Vcb->superblock.sector_size), ALLOC_TAG);
+                            ext2->csum = ExAllocatePoolWithTag(PagedPool, (ULONG)((ed2d->num_bytes * Vcb->csum_size) >> Vcb->sector_shift), ALLOC_TAG);
                             if (!ext2->csum) {
                                 ERR("out of memory\n");
                                 Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -3549,10 +3549,10 @@ static NTSTATUS duplicate_extents(device_extension* Vcb, PFILE_OBJECT FileObject
                                 goto end;
                             }
 
-                            RtlCopyMemory(ext2->csum, (uint8_t*)ext->csum + ((ed2d->offset - ed2s->offset) * Vcb->csum_size / Vcb->superblock.sector_size),
-                                          (ULONG)(ed2d->num_bytes * Vcb->csum_size / Vcb->superblock.sector_size));
+                            RtlCopyMemory(ext2->csum, (uint8_t*)ext->csum + (((ed2d->offset - ed2s->offset) * Vcb->csum_size) >> Vcb->sector_shift),
+                                          (ULONG)((ed2d->num_bytes * Vcb->csum_size) >> Vcb->sector_shift));
                         } else {
-                            ext2->csum = ExAllocatePoolWithTag(PagedPool, (ULONG)(ed2d->size * Vcb->csum_size / Vcb->superblock.sector_size), ALLOC_TAG);
+                            ext2->csum = ExAllocatePoolWithTag(PagedPool, (ULONG)((ed2d->size * Vcb->csum_size) >> Vcb->sector_shift), ALLOC_TAG);
                             if (!ext2->csum) {
                                 ERR("out of memory\n");
                                 Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -3560,7 +3560,7 @@ static NTSTATUS duplicate_extents(device_extension* Vcb, PFILE_OBJECT FileObject
                                 goto end;
                             }
 
-                            RtlCopyMemory(ext2->csum, ext->csum, (ULONG)(ed2s->size * Vcb->csum_size / Vcb->superblock.sector_size));
+                            RtlCopyMemory(ext2->csum, ext->csum, (ULONG)((ed2s->size * Vcb->csum_size) >> Vcb->sector_shift));
                         }
                     } else
                         ext2->csum = NULL;
@@ -4672,7 +4672,7 @@ static NTSTATUS resize_device(device_extension* Vcb, void* data, ULONG len, PIRP
 
     TRACE("(%p, %p, %lu)\n", Vcb, data, len);
 
-    if (!data || len < sizeof(btrfs_resize) || (br->size % Vcb->superblock.sector_size) != 0)
+    if (!data || len < sizeof(btrfs_resize) || (br->size & (Vcb->superblock.sector_size - 1)) != 0)
         return STATUS_INVALID_PARAMETER;
 
     if (!SeSinglePrivilegeCheck(RtlConvertLongToLuid(SE_MANAGE_VOLUME_PRIVILEGE), Irp->RequestorMode))
