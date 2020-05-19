@@ -2735,7 +2735,7 @@ end:
 }
 
 __attribute__((nonnull(1,2,3)))
-void add_insert_extent_rollback(LIST_ENTRY* rollback, fcb* fcb, extent* ext) {
+static void add_insert_extent_rollback(LIST_ENTRY* rollback, fcb* fcb, extent* ext) {
     rollback_extent* re;
 
     re = ExAllocatePoolWithTag(NonPagedPool, sizeof(rollback_extent), ALLOC_TAG);
@@ -2879,7 +2879,7 @@ bool insert_extent_chunk(_In_ device_extension* Vcb, _In_ fcb* fcb, _In_ chunk* 
     ExFreePool(ed);
 
     c->used += length;
-    space_list_subtract(c, false, address, length, rollback);
+    space_list_subtract(c, address, length, rollback);
 
     fcb->inode_item.st_blocks += decoded_size;
 
