@@ -418,6 +418,12 @@ static void clean_space_cache(device_extension* Vcb) {
                     clean_space_cache_chunk(Vcb, c);
 
                 space_list_merge(&c->space, &c->space_size, &c->deleting);
+
+                while (!IsListEmpty(&c->deleting)) {
+                    space* s = CONTAINING_RECORD(RemoveHeadList(&c->deleting), space, list_entry);
+
+                    ExFreePool(s);
+                }
             }
 
             c->space_changed = false;
@@ -3649,7 +3655,7 @@ static NTSTATUS update_tree_extents_recursive(device_extension* Vcb, tree* t, PI
 
 static NTSTATUS do_splits(device_extension* Vcb, PIRP Irp, LIST_ENTRY* rollback) {
     ULONG level, max_level;
-    uint32_t min_size;
+    uint32_t min_size, min_size_fst;
     bool empty, done_deletions = false;
     NTSTATUS Status;
     tree* t;
@@ -3758,6 +3764,7 @@ static NTSTATUS do_splits(device_extension* Vcb, PIRP Irp, LIST_ENTRY* rollback)
     }
 
     min_size = (Vcb->superblock.node_size - sizeof(tree_header)) / 2;
+    min_size_fst = (Vcb->superblock.node_size - sizeof(tree_header)) / 4;
 
     for (level = 0; level <= max_level; level++) {
         LIST_ENTRY* le;
@@ -3767,8 +3774,9 @@ static NTSTATUS do_splits(device_extension* Vcb, PIRP Irp, LIST_ENTRY* rollback)
         while (le != &Vcb->trees) {
             t = CONTAINING_RECORD(le, tree, list_entry);
 
-            if (t->write && t->header.level == level && t->header.num_items > 0 && t->parent && t->size < min_size &&
-                t->root->id != BTRFS_ROOT_FREE_SPACE && is_tree_unique(Vcb, t, Irp)) {
+            if (t->write && t->header.level == level && t->header.num_items > 0 && t->parent &&
+                ((t->size < min_size && t->root->id != BTRFS_ROOT_FREE_SPACE) || (t->size < min_size_fst && t->root->id == BTRFS_ROOT_FREE_SPACE)) &&
+                is_tree_unique(Vcb, t, Irp)) {
                 bool done;
 
                 do {
