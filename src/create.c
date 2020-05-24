@@ -2716,7 +2716,7 @@ static NTSTATUS create_stream(_Requires_lock_held_(_Curr_->tree_lock) _Requires_
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (parfileref->fcb->atts & FILE_ATTRIBUTE_READONLY) {
+    if (parfileref->fcb->atts & FILE_ATTRIBUTE_READONLY && !(IrpSp->Flags & SL_IGNORE_READONLY_ATTRIBUTE)) {
         free_fileref(parfileref);
         return STATUS_ACCESS_DENIED;
     }
@@ -3005,8 +3005,10 @@ static NTSTATUS file_create(PIRP Irp, _Requires_lock_held_(_Curr_->tree_lock) _R
     if (Vcb->readonly)
         return STATUS_MEDIA_WRITE_PROTECTED;
 
-    if (options & FILE_DELETE_ON_CLOSE && IrpSp->Parameters.Create.FileAttributes & FILE_ATTRIBUTE_READONLY)
+    if (options & FILE_DELETE_ON_CLOSE && IrpSp->Parameters.Create.FileAttributes & FILE_ATTRIBUTE_READONLY &&
+        !(IrpSp->Flags & SL_IGNORE_READONLY_ATTRIBUTE)) {
         return STATUS_CANNOT_DELETE;
+    }
 
     if (fFsRtlGetEcpListFromIrp && fFsRtlGetNextExtraCreateParameter) {
         if (NT_SUCCESS(fFsRtlGetEcpListFromIrp(Irp, &ecp_list)) && ecp_list) {
